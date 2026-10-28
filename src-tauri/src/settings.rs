@@ -92,9 +92,17 @@ mod tests {
         let s: Settings = serde_json::from_str(r#"{"setupComplete":true,"speedMbps":120.5,"sortOrder":["size"]}"#).unwrap();
         assert!(s.setup_complete);
         assert_eq!(s.preferences.speed_mbps, Some(120.5));
-        assert_eq!(s.preferences.sort_order, ["size"]);
+        assert_eq!(s.preferences.sort_order.last().unwrap(), "size");
         let json = serde_json::to_value(&s).unwrap();
         assert_eq!(json["displayStyle"], "detailed");
         assert!(json.get("preferences").is_none());
+    }
+
+    #[test]
+    fn keeps_filters_from_older_versions() {
+        let s: Settings = serde_json::from_str(r#"{"torboxKey":"tb","filterBySpeed":false,"excludeResolutions":["480p"]}"#).unwrap();
+        assert_eq!(s.torbox_key.as_deref(), Some("tb"));
+        assert!(!s.preferences.filters.speed.enabled);
+        assert_eq!(s.preferences.filters.quality.avoid, ["480p"]);
     }
 }

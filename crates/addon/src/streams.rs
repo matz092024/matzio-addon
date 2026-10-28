@@ -7,35 +7,35 @@ use serde_json::{json, Value};
 use crate::{
     config::Preferences,
     debrid::Service,
+    filters,
     torrent::{format_size, resolution_label, Episode, Torrent},
 };
 
 /// Most results listed per debrid service.
 pub const MAX_PER_SERVICE: usize = 25;
 
-/// Best first using the default sort order.
+/// Best first using the default preferences.
 pub fn rank(torrents: &mut [Torrent]) {
-    rank_by(torrents, &Preferences::default().sort_order);
+    rank_by(torrents, &Preferences::default());
 }
 
 /// Ranks torrents according to the user's ordered sort keys.
-pub fn rank_by(torrents: &mut [Torrent], sort_order: &[String]) {
-    torrents.sort_by(|a, b| compare(false, a, false, b, sort_order));
+pub fn rank_by(torrents: &mut [Torrent], prefs: &Preferences) {
+    torrents.sort_by(|a, b| compare(false, a, false, b, prefs));
 }
 
 /// Compares two stream candidates using the user's ordered sort keys.
-pub fn compare(
-    a_cached: bool,
-    a: &Torrent,
-    b_cached: bool,
-    b: &Torrent,
-    sort_order: &[String],
-) -> Ordering {
-    for key in sort_order {
+pub fn compare(a_cached: bool, a: &Torrent, b_cached: bool, b: &Torrent, prefs: &Preferences) -> Ordering {
+    for key in &prefs.sort_order {
         let ord = match key.as_str() {
             "cached" => b_cached.cmp(&a_cached),
             "resolution" => b.resolution().cmp(&a.resolution()),
-            "language" => b.language().cmp(&a.language()),
+            // English, then multi-audio, then dubs, unless the user picked languages.
+            "language" => filters::compare_preference(key, a, b, &prefs.filters)
+                .unwrap_or_else(|| b.language().cmp(&a.language())),
+            "hdr" | "codec" | "audio" | "keywords" => {
+                filters::compare_preference(key, a, b, &prefs.filters).unwrap_or(Ordering::Equal)
+            }
             "size" => b.size_bytes.unwrap_or(0).cmp(&a.size_bytes.unwrap_or(0)),
             "quality" => b.quality().cmp(&a.quality()),
             "seeders" => b.seeders.unwrap_or(0).cmp(&a.seeders.unwrap_or(0)),
@@ -152,10 +152,10 @@ mod tests {
         Torrent {
             info_hash: "abc".into(),
             name: name.into(),
-            filename: None,
             size_bytes: Some(1 << 30),
             seeders: Some(seeders),
             origin: Some("YTS".into()),
+            ..Torrent::default()
         }
     }
 
@@ -174,7 +174,11 @@ mod tests {
             torrent("Web 1080p WEB-DL", 100),
             torrent("Remux 1080p BluRay REMUX", 10),
         ];
-        rank_by(&mut list, &["language".into(), "quality".into(), "resolution".into()]);
+        let prefs = Preferences {
+            sort_order: vec!["language".into(), "quality".into(), "resolution".into()],
+            ..Preferences::default()
+        };
+        rank_by(&mut list, &prefs);
         let names: Vec<_> = list.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(names, ["Remux 1080p BluRay REMUX", "Web 1080p WEB-DL", "French 2160p FRENCH BluRay"]);
     }

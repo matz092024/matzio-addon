@@ -21,6 +21,8 @@ use super::*;
 
 const CACHED: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const UNCACHED: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+/// Only found by the optional sources.
+const EXTRA: &str = "cccccccccccccccccccccccccccccccccccccccc";
 const BASE: &str = "http://127.0.0.1:7777";
 
 /// Starts a mock of the upstream services and returns its base URL and
@@ -45,9 +47,43 @@ async fn mock_upstreams() -> (String, Arc<Mutex<Vec<String>>>) {
         "/cinemeta/meta/{kind}/{id}",
         get(|Path((kind, _id)): Path<(String, String)>| async move {
             let runtime = if kind == "series" { "45 min" } else { "120 min" };
-            Json(json!({ "meta": { "runtime": runtime } }))
+            Json(json!({ "meta": { "runtime": runtime, "name": "Movie", "year": "2020" } }))
         }),
     );
+
+    let c3 = calls.clone();
+    // Comet repeats a Torrentio result (with its file size in behaviorHints), MediaFusion is down.
+    let others = Router::new()
+        .route(
+            "/comet/stream/{kind}/{id}",
+            get(|| async {
+                Json(json!({ "streams": [
+                    { "name": "[TORRENT] Comet 2160p", "description": "📄 Movie.2020.2160p.WEB\n💾 15.2 GB 👤 12 🔎 RARBG",
+                      "infoHash": CACHED, "behaviorHints": { "videoSize": 16_320_875_724u64 } }
+                ]}))
+            }),
+        )
+        .route("/mediafusion/stream/{kind}/{id}", get(|| async { StatusCode::INTERNAL_SERVER_ERROR }))
+        .route(
+            "/tbsearch/torrents/{id}",
+            get(move |Path(id): Path<String>, headers: axum::http::HeaderMap| async move {
+                log(&c3, &format!("tbsearch:{id}:{}", headers[header::AUTHORIZATION].to_str().unwrap()));
+                Json(json!({ "success": true, "data": { "torrents": [
+                    { "hash": EXTRA, "raw_title": "Movie.2020.1080p.BluRay", "size": 4_000_000_000u64, "seeders": 5 }
+                ]}}))
+            }),
+        )
+        .route(
+            "/zilean/dmm/filtered",
+            get(|| async { Json(json!([{ "info_hash": EXTRA, "raw_title": "Movie.2020.1080p.BluRay", "size": "4000000000" }])) }),
+        )
+        .route(
+            "/knaben",
+            post(|Json(body): Json<Value>| async move {
+                assert_eq!(body["query"], "Movie 2020");
+                Json(json!({ "hits": [{ "hash": UNCACHED, "title": "Movie.2020.720p.WEB", "bytes": 1, "seeders": 1 }] }))
+            }),
+        );
 
     let c = calls.clone();
     let c2 = calls.clone();
@@ -147,7 +183,7 @@ async fn mock_upstreams() -> (String, Arc<Mutex<Vec<String>>>) {
             post(|| async { Json(json!({ "download": "https://download.rd.test/movie.mkv" })) }),
         );
 
-    let app = torrentio.merge(cinemeta).merge(torbox).merge(rd);
+    let app = torrentio.merge(cinemeta).merge(others).merge(torbox).merge(rd);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await });
@@ -158,6 +194,11 @@ async fn state(rd: Option<&str>, torbox: Option<&str>) -> (AppState, Arc<Mutex<V
     let (mock, calls) = mock_upstreams().await;
     let endpoints = Endpoints {
         torrentio: format!("{mock}/torrentio"),
+        comet: format!("{mock}/comet"),
+        mediafusion: format!("{mock}/mediafusion"),
+        torbox_search: format!("{mock}/tbsearch"),
+        zilean: format!("{mock}/zilean"),
+        knaben: format!("{mock}/knaben"),
         cinemeta: format!("{mock}/cinemeta"),
         torbox: format!("{mock}/torbox"),
         real_debrid: format!("{mock}/rd"),
@@ -264,25 +305,99 @@ async fn applies_preferences_for_sorting_filters_speed_and_display() {
     assert_eq!(streams[1]["title"], "15.20 GB · RD");
 
     // Exclude 4K (2160p).
-    state.config.write().unwrap().preferences = Preferences {
-        exclude_resolutions: vec!["2160p".into()],
-        ..Preferences::default()
-    };
+    let mut prefs = Preferences::default();
+    prefs.filters.quality.avoid = vec!["2160p".into()];
+    state.config.write().unwrap().preferences = prefs.clone();
     let (_, body) = get_json(&app, "/stream/movie/tt0111161.json").await;
     let streams = body.unwrap()["streams"].as_array().unwrap().clone();
     assert_eq!(streams.len(), 1);
     assert_eq!(streams[0]["name"], "Matzio RD\n720p");
 
+    // The same check set to "show at the bottom" keeps 4K, below 720p.
+    prefs.filters.quality.action = config::Action::Demote;
+    state.config.write().unwrap().preferences = prefs.clone();
+    let (_, body) = get_json(&app, "/stream/movie/tt0111161.json").await;
+    let names: Vec<_> = body.unwrap()["streams"].as_array().unwrap().iter().map(|s| s["name"].clone()).collect();
+    assert_eq!(names, ["Matzio RD\n720p", "Matzio RD\n4K"]);
+
+    // Switched off, it does nothing.
+    prefs.filters.quality.enabled = false;
+    state.config.write().unwrap().preferences = prefs;
+    let (_, body) = get_json(&app, "/stream/movie/tt0111161.json").await;
+    let names: Vec<_> = body.unwrap()["streams"].as_array().unwrap().iter().map(|s| s["name"].clone()).collect();
+    assert_eq!(names, ["Matzio RD\n4K", "Matzio RD\n720p"]);
+
     // Speed filter with 10 Mbps on a 120-min movie (~9 GB cap) hides the 15.2 GB 4K stream.
-    state.config.write().unwrap().preferences = Preferences {
-        speed_mbps: Some(10.0),
-        filter_by_speed: true,
-        ..Preferences::default()
-    };
+    state.config.write().unwrap().preferences = Preferences { speed_mbps: Some(10.0), ..Preferences::default() };
     let (_, body) = get_json(&app, "/stream/movie/tt0111161.json").await;
     let streams = body.unwrap()["streams"].as_array().unwrap().clone();
     assert_eq!(streams.len(), 1);
     assert_eq!(streams[0]["name"], "Matzio RD\n720p");
+
+    // A plain size cap does the same without a speed.
+    let mut prefs = Preferences::default();
+    prefs.filters.size.max_gb = Some(10.0);
+    state.config.write().unwrap().preferences = prefs;
+    let (_, body) = get_json(&app, "/stream/movie/tt0111161.json").await;
+    let streams = body.unwrap()["streams"].as_array().unwrap().clone();
+    assert_eq!(streams.len(), 1);
+    assert_eq!(streams[0]["name"], "Matzio RD\n720p");
+
+    // Result limits.
+    let mut prefs = Preferences::default();
+    prefs.filters.limits = config::Limits { enabled: true, total: 1, per_resolution: 5 };
+    state.config.write().unwrap().preferences = prefs;
+    let (_, body) = get_json(&app, "/stream/movie/tt0111161.json").await;
+    assert_eq!(body.unwrap()["streams"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn merges_sources_and_respects_their_switches() {
+    let (state, _) = state(Some("rd-key"), None).await;
+    let app = router(state.clone());
+    let hashes = |body: Option<Value>| -> Vec<String> {
+        body.unwrap()["streams"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["url"].as_str().unwrap().split('/').nth(5).unwrap().split('?').next().unwrap().to_owned())
+            .collect()
+    };
+
+    // Zilean and Knaben are off by default; Comet's copy of a Torrentio result is merged.
+    let (_, body) = get_json(&app, "/stream/movie/tt0111161.json").await;
+    assert_eq!(hashes(body), [CACHED, UNCACHED]);
+
+    let mut prefs = Preferences::default();
+    prefs.sources.zilean = true;
+    prefs.sources.knaben = true;
+    state.config.write().unwrap().preferences = prefs.clone();
+    let (_, body) = get_json(&app, "/stream/movie/tt0111161.json").await;
+    assert_eq!(hashes(body), [CACHED, EXTRA, UNCACHED]);
+
+    // Only Zilean on.
+    prefs.sources = config::Sources { torrentio: false, comet: false, mediafusion: false, knaben: false, ..prefs.sources };
+    state.config.write().unwrap().preferences = prefs.clone();
+    let (_, body) = get_json(&app, "/stream/movie/tt0111161.json").await;
+    assert_eq!(hashes(body), [EXTRA]);
+
+    // A custom address replaces the built-in one.
+    let base = state.endpoints.torrentio.clone();
+    prefs.sources.torrentio = true;
+    prefs.sources.zilean = false;
+    prefs.sources.urls.insert("torrentio".into(), format!("{base}/manifest.json"));
+    state.config.write().unwrap().preferences = prefs;
+    let (_, body) = get_json(&app, "/stream/movie/tt0111161.json").await;
+    assert_eq!(hashes(body), [CACHED, UNCACHED]);
+}
+
+#[tokio::test]
+async fn uses_torbox_search_with_a_torbox_key() {
+    let (app, calls) = app(None, Some("tb-key")).await;
+    // The extra result isn't cached on TorBox, so it isn't listed, but the search ran.
+    let (status, _) = get_json(&app, "/stream/movie/tt0111161.json").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(*calls.lock().unwrap(), ["tbsearch:imdb:tt0111161:Bearer tb-key"]);
 }
 
 #[tokio::test]

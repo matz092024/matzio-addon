@@ -202,6 +202,10 @@ export const SORT_KEYS: Record<string, { label: string; hint: string }> = {
   cached: { label: "Cached first", hint: "Instant play on your debrid" },
   resolution: { label: "Resolution", hint: "4K → 1080p → 720p" },
   language: { label: "Language", hint: "Your languages first" },
+  keywords: { label: "Preferred words", hint: "Words and groups you prefer" },
+  hdr: { label: "HDR", hint: "Your HDR picks in Filters" },
+  audio: { label: "Audio", hint: "Your audio picks in Filters" },
+  codec: { label: "Codec", hint: "Your codec picks in Filters" },
   size: { label: "Size", hint: "Largest that plays smoothly" },
   quality: { label: "Source", hint: "Remux → BluRay → WEB" },
   seeders: { label: "Seeders", hint: "Most shared first" },
@@ -216,13 +220,28 @@ function renumber(list: HTMLElement) {
   [...list.children].forEach((row, i) => (row.querySelector(".num")!.textContent = String(i + 1)));
 }
 
-/** Pointer-driven reordering; Alt+Up/Down does the same from the keyboard. */
+/** Moves a row one place up or down and saves. */
+function nudge(list: HTMLElement, row: HTMLElement, by: -1 | 1) {
+  if (by < 0 && row.previousElementSibling) row.previousElementSibling.before(row);
+  else if (by > 0 && row.nextElementSibling) row.nextElementSibling.after(row);
+  else return;
+  renumber(list);
+  saveOrder(list);
+}
+
+/**
+ * Pointer-driven reordering, plus arrow buttons and Alt+Up/Down. The move and up
+ * listeners sit on the window rather than using pointer capture on the row:
+ * moving a captured element in the DOM releases the capture, which stopped the
+ * drag after the first step.
+ */
 function makeSortable(list: HTMLElement) {
   list.addEventListener("pointerdown", (down) => {
-    const row = (down.target as HTMLElement).closest<HTMLElement>(".rank-row");
-    if (!row || down.button !== 0) return;
+    const target = down.target as HTMLElement;
+    const row = target.closest<HTMLElement>(".rank-row");
+    if (!row || down.button !== 0 || target.closest("button")) return;
     down.preventDefault();
-    row.setPointerCapture(down.pointerId);
+    row.focus();
     row.classList.add("dragging");
     const move = (e: PointerEvent) => {
       const over = [...list.children].find((other) => {
@@ -231,43 +250,51 @@ function makeSortable(list: HTMLElement) {
       });
       if (!over) return;
       const after = e.clientY > over.getBoundingClientRect().top + over.clientHeight / 2;
-      over[after ? "after" : "before"](row);
-      renumber(list);
+      if (after ? over.nextElementSibling !== row : over.previousElementSibling !== row) {
+        over[after ? "after" : "before"](row);
+        renumber(list);
+      }
     };
     const up = () => {
       row.classList.remove("dragging");
-      row.removeEventListener("pointermove", move);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
       saveOrder(list);
     };
-    row.addEventListener("pointermove", move);
-    row.addEventListener("pointerup", up, { once: true });
-    row.addEventListener("pointercancel", up, { once: true });
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
   });
   list.addEventListener("keydown", (e) => {
     const row = e.target as HTMLElement;
     if (!e.altKey || !row.classList.contains("rank-row")) return;
-    if (e.key === "ArrowUp" && row.previousElementSibling) row.previousElementSibling.before(row);
-    else if (e.key === "ArrowDown" && row.nextElementSibling) row.nextElementSibling.after(row);
-    else return;
+    if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
     e.preventDefault();
+    nudge(list, row, e.key === "ArrowUp" ? -1 : 1);
     row.focus();
-    renumber(list);
-    saveOrder(list);
   });
 }
 
 function renderSorting(el: HTMLElement) {
   const list = h("div", { class: "glass rank" });
+  const arrow = (text: string, label: string, by: -1 | 1) => {
+    const b = h("button", { class: "nudge", type: "button", ariaLabel: label, title: label }, text);
+    b.onclick = () => nudge(list, b.closest<HTMLElement>(".rank-row")!, by);
+    return b;
+  };
   state.settings.sortOrder
     .filter((key) => key in SORT_KEYS)
     .forEach((key, i) =>
       list.append(
         h(
           "div",
-          { class: "rank-row", tabIndex: 0, data: { key }, title: "Drag, or press Alt+Up/Down" },
+          { class: "rank-row", tabIndex: 0, data: { key }, title: "Drag, use the arrows, or press Alt+Up/Down" },
           h("span", { class: "num" }, String(i + 1)),
           h("b", {}, SORT_KEYS[key].label),
           h("span", { class: "chip" }, SORT_KEYS[key].hint),
+          arrow("▲", `Move ${SORT_KEYS[key].label} up`, -1),
+          arrow("▼", `Move ${SORT_KEYS[key].label} down`, 1),
           h("span", { class: "grip", ariaHidden: "true" }, "⋮⋮"),
         ),
       ),

@@ -9,12 +9,13 @@
 
 pub mod config;
 pub mod debrid;
+pub mod filters;
 pub mod sources;
 pub mod streams;
 pub mod torrent;
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     net::{Ipv4Addr, SocketAddr},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -100,7 +101,117 @@ impl AppState {
     }
 }
 
+/// How long one source may take before its results are left out.
+const SOURCE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Runs one source's search if it is switched on; a failing or slow source just adds nothing.
+async fn gather<E: std::fmt::Display>(
+    name: &str,
+    on: bool,
+    search: impl std::future::Future<Output = Result<Vec<torrent::Torrent>, E>>,
+) -> Vec<torrent::Torrent> {
+    if !on {
+        return Vec::new();
+    }
+    match tokio::time::timeout(SOURCE_TIMEOUT, search).await {
+        Ok(Ok(found)) => found,
+        Ok(Err(e)) => {
+            eprintln!("{name} search failed: {e}");
+            Vec::new()
+        }
+        Err(_) => {
+            eprintln!("{name} took longer than {}s", SOURCE_TIMEOUT.as_secs());
+            Vec::new()
+        }
+    }
+}
+
 impl AppState {
+    /// Searches every switched-on source at once and merges the results. A torrent found by
+    /// several sources is listed once, with whatever details any of them knew.
+    async fn search(
+        &self,
+        config: &Config,
+        kind: &str,
+        id: &str,
+        imdb_id: &str,
+        episode: Option<torrent::Episode>,
+    ) -> Vec<torrent::Torrent> {
+        let on = &config.preferences.sources;
+        let (http, e) = (&self.http, &*self.endpoints);
+        let url = |name: &str, default: &str| {
+            on.urls.get(name).map(|u| u.trim()).filter(|u| !u.is_empty()).unwrap_or(default).to_owned()
+        };
+        let (torrentio, comet, mediafusion, zilean) = (
+            url("torrentio", &e.torrentio),
+            url("comet", &e.comet),
+            url("mediafusion", &e.mediafusion),
+            url("zilean", &e.zilean),
+        );
+        let torbox_key = config.torbox_key.as_deref().unwrap_or_default();
+
+        let (from_addons, from_apis) = tokio::join!(
+            async {
+                tokio::join!(
+                    gather("Torrentio", on.torrentio, sources::addon::search(http, &torrentio, kind, id)),
+                    gather("Comet", on.comet, sources::addon::search(http, &comet, kind, id)),
+                    gather("MediaFusion", on.mediafusion, sources::addon::search(http, &mediafusion, kind, id)),
+                )
+            },
+            async {
+                tokio::join!(
+                    gather(
+                        "TorBox search",
+                        on.torbox && !torbox_key.is_empty(),
+                        sources::torbox::search(http, &e.torbox_search, torbox_key, imdb_id, episode),
+                    ),
+                    gather("Zilean", on.zilean, sources::zilean::search(http, &zilean, imdb_id, episode)),
+                    gather("Knaben", on.knaben, async {
+                        match sources::cinemeta::title(http, &e.cinemeta, kind, imdb_id).await {
+                            Some(title) => sources::knaben::search(http, &e.knaben, &sources::knaben::query(&title, episode)).await,
+                            None => Ok(Vec::new()),
+                        }
+                    }),
+                )
+            }
+        );
+
+        // Addons list the episode's own file; the others list whole torrents, which for a
+        // series can be season packs (whose size says nothing about the episode) or other episodes.
+        let (a, b, c) = from_addons;
+        let (d, f, g) = from_apis;
+        let whole_torrents = [d, f, g].into_iter().flatten().filter_map(|mut t| {
+            if let Some(ep) = episode {
+                if t.is_other_episode(ep) {
+                    return None;
+                }
+                if !torrent::matches_episode(&t.name, ep) {
+                    t.size_bytes = None;
+                }
+            }
+            Some(t)
+        });
+
+        let mut merged: Vec<torrent::Torrent> = Vec::new();
+        let mut index: HashMap<String, usize> = HashMap::new();
+        for t in [a, b, c].into_iter().flatten().chain(whole_torrents) {
+            match index.get(&t.info_hash) {
+                Some(&i) => {
+                    let known = &mut merged[i];
+                    known.filename = known.filename.take().or(t.filename);
+                    known.size_bytes = known.size_bytes.or(t.size_bytes);
+                    known.seeders = known.seeders.or(t.seeders);
+                    known.notes = known.notes.take().or(t.notes);
+                }
+                None => {
+                    index.insert(t.info_hash.clone(), merged.len());
+                    merged.push(t);
+                }
+            }
+        }
+        merged
+    }
+
     /// Checks a debrid API key (not necessarily the saved one).
     pub async fn check_key(&self, service: Service, key: &str) -> Result<debrid::Account, DebridError> {
         debrid::account(&self.http, &self.endpoints, service, key.trim()).await
@@ -140,61 +251,50 @@ async fn stream(State(state): State<AppState>, Path((kind, file)): Path<(String,
     }
 
     let prefs = &config.preferences;
-    let speed_limit = prefs.speed_mbps.filter(|&mbps| prefs.filter_by_speed && mbps > 0.0);
+    let speed_limit = prefs.speed_mbps.filter(|&mbps| prefs.filters.speed.enabled && mbps > 0.0);
 
-    let (search_res, runtime) = tokio::join!(
-        sources::torrentio::search(&state.http, &state.endpoints.torrentio, &kind, id),
-        async {
-            let _ = speed_limit?;
-            state.runtime(&kind, id, imdb_id, episode).await
-        }
-    );
-
-    let mut torrents = match search_res {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("torrent search failed for {id}: {e}");
-            Vec::new()
-        }
-    };
-    let mut seen = HashSet::new();
-    torrents.retain(|t| {
-        seen.insert(t.info_hash.clone())
-            && !t.is_excluded(&prefs.exclude_resolutions)
-            && match (speed_limit, runtime) {
-                (Some(mbps), Some(rt)) => torrent::fits_speed(t.size_bytes, rt, mbps),
-                _ => true,
-            }
+    let (torrents, runtime) = tokio::join!(state.search(&config, &kind, id, imdb_id, episode), async {
+        let _ = speed_limit?;
+        state.runtime(&kind, id, imdb_id, episode).await
     });
-    streams::rank_by(&mut torrents, &prefs.sort_order);
 
-    let mut candidates: Vec<(Service, bool, &torrent::Torrent)> = Vec::new();
+    let cx = filters::Context { speed_mbps: speed_limit, runtime };
+    // Each kept torrent with whether it failed a "show at the bottom" check.
+    let mut kept: Vec<(torrent::Torrent, bool)> = torrents
+        .into_iter()
+        .filter_map(|t| {
+            let verdict = filters::judge(&t, &prefs.filters, cx);
+            (!verdict.hidden).then_some((t, verdict.demoted))
+        })
+        .collect();
+    kept.sort_by(|(a, a_down), (b, b_down)| a_down.cmp(b_down).then_with(|| streams::compare(false, a, false, b, prefs)));
+
+    let mut candidates: Vec<(Service, bool, bool, &torrent::Torrent)> = Vec::new();
     if let Some(key) = &config.torbox_key {
-        let hashes: Vec<_> = torrents.iter().map(|t| t.info_hash.clone()).collect();
+        let hashes: Vec<_> = kept.iter().map(|(t, _)| t.info_hash.clone()).collect();
         match debrid::torbox::cached(&state.http, &state.endpoints.torbox, key, &hashes).await {
             Ok(cached) => candidates.extend(
-                torrents
-                    .iter()
-                    .filter(|t| cached.contains(&t.info_hash))
+                kept.iter()
+                    .filter(|(t, _)| cached.contains(&t.info_hash))
                     .take(streams::MAX_PER_SERVICE)
-                    .map(|t| (Service::TorBox, true, t)),
+                    .map(|(t, down)| (Service::TorBox, true, *down, t)),
             ),
             Err(e) => eprintln!("TorBox cache check failed: {e}"),
         }
     }
     if config.real_debrid_key.is_some() {
         candidates.extend(
-            torrents
-                .iter()
+            kept.iter()
                 .take(streams::MAX_PER_SERVICE)
-                .map(|t| (Service::RealDebrid, false, t)),
+                .map(|(t, down)| (Service::RealDebrid, false, *down, t)),
         );
     }
-    candidates.sort_by(|a, b| streams::compare(a.1, a.2, b.1, b.2, &prefs.sort_order));
+    candidates.sort_by(|a, b| a.2.cmp(&b.2).then_with(|| streams::compare(a.1, a.3, b.1, b.3, prefs)));
+    let candidates = filters::limit(candidates, &prefs.filters, |c| c.3.resolution());
 
     let list: Vec<_> = candidates
         .into_iter()
-        .map(|(service, cached, t)| {
+        .map(|(service, cached, _, t)| {
             streams::stream_with_style(&state.base_url, service, cached, t, episode, &prefs.display_style)
         })
         .collect();
