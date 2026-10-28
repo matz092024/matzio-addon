@@ -59,6 +59,7 @@
         <button class="nav-item" data-page="sources" type="button"><span class="icon">⌕</span>Sources</button>
         <button class="nav-item" data-page="sorting" type="button"><span class="icon">⇅</span>Sorting</button>
         <button class="nav-item" data-page="filters" type="button"><span class="icon">⧩</span>Filters</button>
+        <button class="nav-item" data-page="subtitles" type="button"><span class="icon">❞</span>Subtitles</button>
         <button class="nav-item" data-page="display" type="button"><span class="icon">✎</span>Stream display</button>
         <button class="nav-item" data-page="connection" type="button"><span class="icon">⇣</span>Connection</button>
         <button class="nav-item" data-page="updates" type="button"><span class="icon">⟳</span>Updates</button>
@@ -88,7 +89,7 @@
           <div class="glass row">
             <div>
               <div class="label">Share your settings</div>
-              <div class="subtle small">Save sorting, filters, sources and display to a file, or load one from a friend. Your debrid keys are never included.</div>
+              <div class="subtle small">Save sorting, filters, sources, subtitles and display to a file, or load one from a friend. Your debrid and subtitle keys are never included.</div>
             </div>
             <div class="buttons">
               <button class="ghost" id="export-settings" type="button">Export</button>
@@ -119,6 +120,12 @@
           <h1>Filters</h1>
           <p class="subtle">Every check can be switched off on its own, and can either hide streams or just move them to the bottom. Preferences (★) rank streams through their place under Sorting.</p>
           <div class="check-list" id="filter-cards"></div>
+        </section>
+
+        <section class="page" data-page="subtitles">
+          <h1>Subtitles</h1>
+          <p class="subtle">Subtitles from OpenSubtitles and SubDL, listed in Stremio's player next to the ones Stremio finds. Each provider needs your own free key, which stays on this PC.</p>
+          <div class="check-list" id="subtitle-cards"></div>
         </section>
 
         <section class="page" data-page="display">

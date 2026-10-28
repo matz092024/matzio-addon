@@ -8,7 +8,8 @@ mod updates;
 use std::sync::{Arc, RwLock};
 
 use matzio_addon::{
-    base_url, bind, debrid::Service, manifest_url, serve, AppState, Config, Endpoints, SharedConfig, DEFAULT_PORT,
+    base_url, bind, debrid::Service, manifest_url, serve, subtitles::Provider, AppState, Config, Endpoints,
+    SharedConfig, DEFAULT_PORT,
 };
 use serde::Serialize;
 use tauri::{
@@ -21,7 +22,7 @@ use tauri::window::{Effect, EffectsBuilder};
 use tauri_plugin_autostart::ManagerExt as _;
 use tauri_plugin_opener::OpenerExt;
 
-use settings::{Preferences, Settings, SettingsStore};
+use settings::{Preferences, Settings, SettingsStore, SubtitleKeys};
 use updates::{UpdateStatus, Updates};
 
 const SETTINGS_LABEL: &str = "settings";
@@ -145,6 +146,7 @@ impl From<&Settings> for DebridKeys {
 
 fn config_from(settings: &Settings) -> Config {
     Config::new(settings.real_debrid_key.clone(), settings.torbox_key.clone())
+        .with_subtitle_keys(settings.subtitle_keys.clone())
         .with_preferences(settings.preferences.clone())
 }
 
@@ -185,6 +187,37 @@ async fn check_debrid_key(addon: State<'_, AppState>, service: String, key: Stri
     Ok(match addon.check_key(service, &key).await {
         Ok(a) => KeyCheck { ok: true, username: a.username, premium: a.premium, expires: a.expires, error: None },
         Err(e) => KeyCheck { ok: false, username: None, premium: false, expires: None, error: Some(e.to_string()) },
+    })
+}
+
+#[tauri::command]
+fn get_subtitle_keys(store: State<SettingsStore>) -> SubtitleKeys {
+    store.get().subtitle_keys
+}
+
+#[tauri::command]
+fn set_subtitle_keys(
+    store: State<SettingsStore>,
+    config: State<SharedConfig>,
+    keys: SubtitleKeys,
+) -> Result<SubtitleKeys, String> {
+    let saved = store.update(|s| s.subtitle_keys = keys.cleaned())?;
+    *config.write().unwrap() = config_from(&saved);
+    Ok(saved.subtitle_keys)
+}
+
+#[derive(Serialize)]
+struct SubtitleCheck {
+    ok: bool,
+    message: String,
+}
+
+#[tauri::command]
+async fn check_subtitle_key(addon: State<'_, AppState>, provider: String, keys: SubtitleKeys) -> Result<SubtitleCheck, String> {
+    let provider = Provider::from_slug(&provider).ok_or("provider must be \"opensubtitles\" or \"subdl\"")?;
+    Ok(match addon.check_subtitle_key(provider, keys).await {
+        Ok(message) => SubtitleCheck { ok: true, message },
+        Err(e) => SubtitleCheck { ok: false, message: e.to_string() },
     })
 }
 
@@ -293,6 +326,9 @@ pub fn run() {
             get_debrid_keys,
             set_debrid_keys,
             check_debrid_key,
+            get_subtitle_keys,
+            set_subtitle_keys,
+            check_subtitle_key,
             set_start_with_windows,
         ])
         .setup(|app| {

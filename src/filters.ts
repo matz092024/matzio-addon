@@ -5,7 +5,7 @@ import { h, savePreferences, state } from "./state";
 
 type CheckId = keyof Filters;
 
-function switchInput(checked: boolean, label: string, onChange: (on: boolean) => void) {
+export function switchInput(checked: boolean, label: string, onChange: (on: boolean) => void) {
   const input = h("input", { type: "checkbox", checked, ariaLabel: label });
   input.onchange = () => onChange(input.checked);
   return h("label", { class: "switch" }, input, h("span", { class: "track" }, h("span", { class: "thumb" })));
@@ -46,7 +46,7 @@ function card(id: CheckId, title: string, hint: string, ...body: (Node | null)[]
 }
 
 /** A number box that saves on change; empty means "no limit". */
-function numberField(label: string, value: number | null | undefined, unit: string, onSave: (v: number | null) => void) {
+export function numberField(label: string, value: number | null | undefined, unit: string, onSave: (v: number | null) => void) {
   const input = h("input", { type: "number", min: "0", step: "any", value: value ? String(value) : "", placeholder: "—", ariaLabel: label });
   input.onchange = () => {
     const v = Number(input.value);

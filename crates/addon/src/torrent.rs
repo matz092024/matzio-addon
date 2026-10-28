@@ -21,6 +21,11 @@ pub struct Torrent {
 }
 
 impl Torrent {
+    /// A torrent known only by its name, for reading tags out of a release or file name.
+    pub fn from_name(name: &str) -> Self {
+        Torrent { name: name.to_owned(), ..Torrent::default() }
+    }
+
     pub fn resolution(&self) -> u32 {
         resolution(&self.name).or_else(|| self.filename.as_deref().and_then(resolution)).unwrap_or(0)
     }

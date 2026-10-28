@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { exportSettings, importSettings } from "./backup";
 import { renderFilters } from "./filters";
 import { renderSources } from "./sources";
+import { renderSubtitles } from "./subtitles";
 import { h, onChange, savePreferences, state } from "./state";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -38,6 +39,7 @@ function showStatus() {
 const renderFilterPage = () => {
   renderFilters($("filter-cards"));
   renderSources($("source-cards"));
+  renderSubtitles($("subtitle-cards"));
 };
 
 // ---------- Stream display ----------

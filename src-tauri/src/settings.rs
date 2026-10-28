@@ -3,7 +3,7 @@
 
 use std::{fs, path::PathBuf, sync::Mutex};
 
-pub use matzio_addon::Preferences;
+pub use matzio_addon::{config::SubtitleKeys, Preferences};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
@@ -17,6 +17,9 @@ pub struct Settings {
     /// Debrid API keys, kept only in this file on the user's PC.
     pub real_debrid_key: Option<String>,
     pub torbox_key: Option<String>,
+    /// OpenSubtitles and SubDL keys, also only in this file.
+    #[serde(flatten)]
+    pub subtitle_keys: SubtitleKeys,
     /// The first-run setup was finished (or skipped); until then the window opens on it.
     pub setup_complete: bool,
     #[serde(flatten)]
@@ -30,6 +33,7 @@ impl Default for Settings {
             start_with_windows: true,
             real_debrid_key: None,
             torbox_key: None,
+            subtitle_keys: SubtitleKeys::default(),
             setup_complete: false,
             preferences: Preferences::default(),
         }
@@ -96,6 +100,16 @@ mod tests {
         let json = serde_json::to_value(&s).unwrap();
         assert_eq!(json["displayStyle"], "detailed");
         assert!(json.get("preferences").is_none());
+    }
+
+    #[test]
+    fn subtitle_keys_sit_beside_the_debrid_keys() {
+        let s: Settings = serde_json::from_str(r#"{"subdlKey":"sd","subtitles":{"languages":["de"]}}"#).unwrap();
+        assert_eq!(s.subtitle_keys.subdl_key.as_deref(), Some("sd"));
+        assert_eq!(s.preferences.subtitles.languages, ["de"]);
+        let json = serde_json::to_value(&s).unwrap();
+        assert_eq!(json["subdlKey"], "sd");
+        assert!(json["subtitles"].get("subdlKey").is_none());
     }
 
     #[test]

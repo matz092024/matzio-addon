@@ -34,7 +34,8 @@ rejected for idle resource use.
 
 ```
 crates/addon/            Stremio addon server (Rust library, axum)
-  src/lib.rs             routes: /manifest.json, /stream/..., /play/{service}/{hash}
+  src/lib.rs             routes: /manifest.json, /stream/..., /play/{service}/{hash},
+                         /subtitles/... (list), /subtitle/{provider}/{file}.srt (download)
   src/config.rs          debrid keys + preferences (shared, live-updated) + service base URLs
   src/streams.rs         ranks and formats Stremio stream entries
   src/torrent.rs         parses torrent titles (resolution, quality, languages, HDR, codec, audio...)
@@ -42,6 +43,7 @@ crates/addon/            Stremio addon server (Rust library, axum)
   src/sources/addon.rs       Stremio-addon sources (Torrentio, Comet, MediaFusion)
   src/sources/{torbox,zilean,knaben}.rs   API sources
   src/sources/cinemeta.rs    runtime (speed filter) and title (Knaben) lookup
+  src/subtitles/             OpenSubtitles + SubDL search, ranking, download (unzips SubDL)
   src/debrid/{realdebrid,torbox}.rs   add torrent, pick file, get direct link
   src/tests.rs           tests against local mock servers
 src-tauri/               Tauri tray app
@@ -128,6 +130,21 @@ keywords and limits. Each has `enabled` and (except limits) `action`
 (`hide` or `demote`). Tag checks have `avoid` and `prefer` lists; prefer lists
 rank streams through the matching sort key. Settings from 0.3 and older
 (`filterBySpeed`, `excludeResolutions`) are migrated on load in `config.rs`.
+
+## Subtitles (0.5, PR pending)
+
+Preferences hold `subtitles`: `enabled`, `openSubtitles`/`subdl` switches, ordered
+`languages` (Matzio codes like `en`, `pt-br`), `perLanguage`, and `hearingImpaired` /
+`machineTranslated` placement (`show`, `demote`, `hide`). Keys sit at the top of
+settings.json (`openSubtitlesKey`, optional `openSubtitlesUsername`/`Password`,
+`subdlKey`) and are never exported. Stremio asks `/subtitles/{type}/{id}/{extra}.json`;
+results are ranked by language order, OpenSubtitles hash match, then how well the release
+matches the stream's file name (group, source, resolution), then downloads. Searches are
+cached 6 h; a file is only downloaded from the provider when the player opens it, then
+kept 3 h (OpenSubtitles counts downloads: 5/day with a key, 20/day signed in). The
+OpenSubtitles and SubDL request formats were written from their docs without live
+access; check them on a real install. Users who installed the addon in Stremio before
+0.5 may need to reinstall it once so Stremio sees the new subtitles resource.
 
 ## Known caveats
 

@@ -4,7 +4,9 @@
 //! when the addon is installed, then `/stream/{type}/{id}.json` every time the
 //! user opens a movie or episode. Picking a stream opens `/play/...`, which
 //! resolves the torrent through the user's debrid service and redirects to the
-//! direct link. Debrid keys never leave this PC except to the debrid service.
+//! direct link. Subtitles come from `/subtitles/...`, and each file from
+//! `/subtitle/...` when the player opens it. Debrid and subtitle keys never leave
+//! this PC except to their own service.
 //! Everything here binds to localhost only.
 
 pub mod config;
@@ -12,6 +14,7 @@ pub mod debrid;
 pub mod filters;
 pub mod sources;
 pub mod streams;
+pub mod subtitles;
 pub mod torrent;
 
 use std::{
@@ -23,7 +26,7 @@ use std::{
 
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{header, StatusCode, Uri},
     response::{Html, IntoResponse, Redirect, Response},
     routing::get,
     Json, Router,
@@ -51,8 +54,8 @@ pub fn manifest() -> Value {
         "id": ADDON_ID,
         "version": env!("CARGO_PKG_VERSION"),
         "name": "Matzio",
-        "description": "Instant debrid streams from your own PC (Real-Debrid, TorBox).",
-        "resources": ["stream"],
+        "description": "Instant debrid streams and subtitles from your own PC (Real-Debrid, TorBox, OpenSubtitles, SubDL).",
+        "resources": ["stream", "subtitles"],
         "types": ["movie", "series"],
         "idPrefixes": ["tt"],
         "catalogs": [],
@@ -68,6 +71,7 @@ pub struct AppState {
     base_url: Arc<str>,
     links: Arc<Mutex<HashMap<(Service, PlayRequest), (Instant, String)>>>,
     runtimes: Arc<Mutex<HashMap<String, Duration>>>,
+    subtitles: Arc<subtitles::Cache>,
 }
 
 impl AppState {
@@ -88,6 +92,7 @@ impl AppState {
             base_url: base_url.trim_end_matches('/').into(),
             links: Default::default(),
             runtimes: Default::default(),
+            subtitles: Default::default(),
         }
     }
 
@@ -216,6 +221,15 @@ impl AppState {
     pub async fn check_key(&self, service: Service, key: &str) -> Result<debrid::Account, DebridError> {
         debrid::account(&self.http, &self.endpoints, service, key.trim()).await
     }
+
+    /// Checks a subtitle provider's key (not necessarily the saved one).
+    pub async fn check_subtitle_key(
+        &self,
+        provider: subtitles::Provider,
+        keys: config::SubtitleKeys,
+    ) -> Result<String, subtitles::SubtitleError> {
+        subtitles::check(&self.http, &self.endpoints, provider, &keys.cleaned()).await
+    }
 }
 
 /// Builds the HTTP router. Stremio's web and desktop clients need CORS.
@@ -225,6 +239,9 @@ pub fn router(state: AppState) -> Router {
         .route("/manifest.json", get(|| async { Json(manifest()) }))
         .route("/stream/{kind}/{file}", get(stream))
         .route("/play/{service}/{hash}", get(play))
+        .route("/subtitles/{kind}/{file}", get(subtitles_plain))
+        .route("/subtitles/{kind}/{id}/{extra}", get(subtitles_with_extra))
+        .route("/subtitle/{provider}/{file}", get(subtitle_file))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }
@@ -351,6 +368,69 @@ async fn play(
             eprintln!("{} could not play {}: {e}", service.short_name(), request.info_hash);
             let status = match e {
                 DebridError::NotCached | DebridError::NoFile => StatusCode::NOT_FOUND,
+                _ => StatusCode::BAD_GATEWAY,
+            };
+            (status, e.to_string()).into_response()
+        }
+    }
+}
+
+async fn subtitles_plain(State(state): State<AppState>, Path((kind, file)): Path<(String, String)>) -> Response {
+    let Some(id) = file.strip_suffix(".json") else { return StatusCode::NOT_FOUND.into_response() };
+    list_subtitles(state, &kind, id, Default::default()).await
+}
+
+async fn subtitles_with_extra(
+    State(state): State<AppState>,
+    Path((kind, id, _)): Path<(String, String, String)>,
+    uri: Uri,
+) -> Response {
+    // Read the extras from the raw path, so encoded "&" and "+" in file names survive.
+    let raw = uri.path().rsplit('/').next().unwrap_or_default();
+    list_subtitles(state, &kind, &id, subtitles::parse_extra(raw)).await
+}
+
+async fn list_subtitles(state: AppState, kind: &str, id: &str, extra: HashMap<String, String>) -> Response {
+    let Some((imdb_id, episode)) = parse_id(id) else { return StatusCode::NOT_FOUND.into_response() };
+    if !matches!((kind, episode.is_some()), ("movie", false) | ("series", true)) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let config = state.config.read().unwrap().clone();
+    let prefs = &config.preferences.subtitles;
+    if !prefs.enabled {
+        return Json(json!({ "subtitles": [] })).into_response();
+    }
+    let languages = subtitles::languages(&prefs.languages);
+    let request = subtitles::Request {
+        imdb_id,
+        episode,
+        languages: &languages,
+        video_hash: extra.get("videoHash").map(String::as_str),
+    };
+    let found = subtitles::search(&state.http, &state.endpoints, &state.subtitles, &config.subtitle_keys, prefs, &request).await;
+    let ranked = subtitles::rank(found, prefs, &languages, extra.get("filename").map(String::as_str));
+    let list: Vec<_> = ranked.iter().map(|s| subtitles::to_stremio(&state.base_url, s, episode)).collect();
+    Json(json!({ "subtitles": list })).into_response()
+}
+
+async fn subtitle_file(
+    State(state): State<AppState>,
+    Path((provider, file)): Path<(String, String)>,
+    Query(query): Query<PlayQuery>,
+) -> Response {
+    let Some(provider) = subtitles::Provider::from_slug(&provider) else { return StatusCode::NOT_FOUND.into_response() };
+    let file = file.strip_suffix(".srt").unwrap_or(&file);
+    if !subtitles::valid_file(file) {
+        return (StatusCode::BAD_REQUEST, "invalid subtitle id").into_response();
+    }
+    let episode = query.s.zip(query.e).map(|(season, episode)| torrent::Episode { season, episode });
+    let keys = state.config.read().unwrap().subtitle_keys.clone();
+    match subtitles::download(&state.http, &state.endpoints, &state.subtitles, &keys, provider, file, episode).await {
+        Ok(found) => ([(header::CONTENT_TYPE, found.content_type)], found.bytes).into_response(),
+        Err(e) => {
+            eprintln!("could not get {} subtitle {file}: {e}", provider.slug());
+            let status = match e {
+                subtitles::SubtitleError::NotFound => StatusCode::NOT_FOUND,
                 _ => StatusCode::BAD_GATEWAY,
             };
             (status, e.to_string()).into_response()
