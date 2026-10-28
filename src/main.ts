@@ -6,7 +6,7 @@ type AddonStatus =
   | { state: "failed"; error: string };
 
 type UpdateStatus =
-  | { state: "notChecked" | "checking" | "upToDate" }
+  | { state: "notChecked" | "checking" | "upToDate" | "noRelease" }
   | { state: "available" | "installing"; version: string }
   | { state: "failed"; error: string };
 
@@ -49,6 +49,7 @@ async function showAddon() {
 function renderUpdate(status: UpdateStatus) {
   const text = $("update-text");
   const button = $<HTMLButtonElement>("update-button");
+  text.title = "";
   button.disabled = false;
   button.textContent = "Check now";
   button.classList.remove("primary");
@@ -65,6 +66,9 @@ function renderUpdate(status: UpdateStatus) {
     case "upToDate":
       text.textContent = "You're up to date";
       break;
+    case "noRelease":
+      text.textContent = "No updates published yet";
+      break;
     case "available":
       text.textContent = `Version ${status.version} is available`;
       button.textContent = "Install and restart";
@@ -75,7 +79,8 @@ function renderUpdate(status: UpdateStatus) {
       button.disabled = true;
       break;
     case "failed":
-      text.textContent = `Couldn't check for updates: ${status.error}`;
+      text.textContent = "Couldn't check for updates. Check your internet connection and try again.";
+      text.title = status.error;
       break;
   }
   button.dataset.state = status.state;
