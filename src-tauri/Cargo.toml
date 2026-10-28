@@ -1,0 +1,20 @@
+[package]
+name = "matzio-tray"
+description = "Matzio tray app: runs the Stremio addon and hosts the settings window"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "matzio_tray_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+matzio-addon = { path = "../crates/addon" }
+serde = { version = "1", features = ["derive"] }
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
