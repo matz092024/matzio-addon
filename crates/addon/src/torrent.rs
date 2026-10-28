@@ -416,6 +416,20 @@ fn basename(path: &str) -> &str {
     path.rsplit(['/', '\\']).next().unwrap_or(path)
 }
 
+/// The release group: the part after the last dash, as in "Movie.2020.1080p.WEB-DL.x264-GROUP".
+pub fn release_group(name: &str) -> Option<&str> {
+    let name = name.trim();
+    let name = match name.rsplit_once('.') {
+        Some((stem, ext)) if ext.len() <= 4 && ext.chars().all(|c| c.is_ascii_alphanumeric()) && !ext.chars().all(|c| c.is_ascii_digit()) => stem,
+        _ => name,
+    };
+    let (_, group) = name.rsplit_once('-')?;
+    let group = group.split(['[', ' ', '(']).next()?.trim();
+    // Dashes inside tags, as in "WEB-DL" or "Blu-Ray", don't name a group.
+    let tag = ["dl", "rip", "ray", "hd", "ma", "x", "sd"].iter().any(|t| group.eq_ignore_ascii_case(t));
+    (group.len() >= 2 && !tag && group.chars().all(|c| c.is_ascii_alphanumeric())).then_some(group)
+}
+
 /// Whether a file or release name is this episode, as in "S01E02" or "1x02".
 pub fn matches_episode(name: &str, ep: Episode) -> bool {
     let re = Regex::new(&format!(
@@ -459,6 +473,15 @@ pub fn pick_file<'a, Id>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finds_release_groups() {
+        assert_eq!(release_group("Movie.2020.1080p.WEB-DL.x264-NTb.mkv"), Some("NTb"));
+        assert_eq!(release_group("Movie 2020 1080p BluRay x265-RARBG"), Some("RARBG"));
+        assert_eq!(release_group("Movie.2020.1080p.WEB-DL"), None);
+        assert_eq!(release_group("Movie 2020"), None);
+    }
+
 
     #[test]
     fn parses_ids() {

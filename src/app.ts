@@ -44,20 +44,91 @@ const renderFilterPage = () => {
 
 // ---------- Stream display ----------
 
-const DISPLAY_STYLES: Record<string, { label: string; hint: string; name: string; title: string }> = {
-  compact: {
-    label: "Compact",
-    hint: "Resolution and size only. Easy to scan.",
-    name: "Matzio\n4K",
-    title: "18.4 GB · RD ⚡",
-  },
-  detailed: {
-    label: "Detailed",
-    hint: "Everything that sets streams apart.",
-    name: "Matzio ⚡\n4K HDR",
-    title: "Dune Part Two (2024) 2160p BluRay REMUX\nEnglish 5.1 · 18.4 GB · Real-Debrid cached",
-  },
+const DISPLAY_STYLES: Record<string, { label: string; hint: string }> = {
+  compact: { label: "Compact", hint: "Resolution and size only. Easy to scan." },
+  detailed: { label: "Detailed", hint: "Everything that sets streams apart." },
+  custom: { label: "Custom", hint: "Your own layout, built from the details you pick." },
 };
+
+let labelInfo: Awaited<ReturnType<typeof api.streamLabelInfo>> | null = null;
+// Templates being typed, so the preview can follow before they're saved.
+let drafts: { name: string; title: string } | null = null;
+
+async function showPreview() {
+  const s = state.settings;
+  const name = drafts?.name ?? s.nameTemplate;
+  const title = drafts?.title ?? s.titleTemplate;
+  const label = await api.previewStreamLabel(s.displayStyle, name, title).catch(() => null);
+  if (!label) return;
+  $("display-preview").replaceChildren(
+    h("div", { class: "preview-name" }, label.name),
+    h("div", { class: "preview-title" }, label.title),
+  );
+}
+
+// The editor stays in place while its text matches what's saved, so saving doesn't
+// take the cursor out of the box being typed in.
+let editor: { el: HTMLElement; matches: () => boolean } | null = null;
+
+function templateEditor() {
+  const s = state.settings;
+  let last: HTMLTextAreaElement | null = null;
+  const area = (key: "name" | "title", label: string, value: string, rows: number) => {
+    const input = h("textarea", { value: drafts?.[key] ?? value, rows, spellcheck: false, ariaLabel: label });
+    input.onfocus = () => (last = input);
+    input.oninput = () => {
+      drafts = { name: nameBox.value, title: titleBox.value };
+      showPreview();
+    };
+    input.onchange = save;
+    return { input, field: h("label", { class: "words-field" }, h("span", { class: "subtle small" }, label), input) };
+  };
+  const { input: nameBox, field: nameField } = area("name", "Left column (the name)", s.nameTemplate, 2);
+  const { input: titleBox, field: titleField } = area("title", "Right column (the description)", s.titleTemplate, 4);
+  function save() {
+    const [nameTemplate, titleTemplate] = [nameBox.value, titleBox.value];
+    if (nameTemplate === s.nameTemplate && titleTemplate === s.titleTemplate) return;
+    drafts = null;
+    savePreferences((p) => Object.assign(p, { nameTemplate, titleTemplate }));
+  }
+
+  const chips = (labelInfo?.variables ?? []).map(([name, hint]) => {
+    const chip = h("button", { class: "toggle-chip", type: "button", title: hint }, `{${name}}`);
+    // Keep the text box focused, so the variable goes where the cursor was.
+    chip.onmousedown = (e) => e.preventDefault();
+    chip.onclick = () => {
+      const box = last ?? titleBox;
+      box.setRangeText(`{${name}}`, box.selectionStart, box.selectionEnd, "end");
+      box.focus();
+      box.dispatchEvent(new Event("input"));
+      save();
+    };
+    return chip;
+  });
+
+  const reset = h("button", { class: "link", type: "button" }, "Back to the default");
+  reset.onclick = () => {
+    if (!labelInfo) return;
+    drafts = null;
+    savePreferences((p) => Object.assign(p, { nameTemplate: labelInfo!.defaultName, titleTemplate: labelInfo!.defaultTitle }));
+  };
+
+  const el = h(
+    "div",
+    { class: "glass check" },
+    h("div", { class: "row" }, h("div", { class: "label" }, "Your layout"), reset),
+    h(
+      "div",
+      { class: "check-body" },
+      nameField,
+      titleField,
+      h("div", { class: "subtle small" }, "Click a detail to add it where the cursor is. Put a part in [brackets] to leave it out when a detail inside is unknown, like [👤 {seeders}]. Each line shows as its own line in Stremio."),
+      h("div", { class: "chips" }, ...chips),
+    ),
+  );
+  const matches = () => nameBox.value === state.settings.nameTemplate && titleBox.value === state.settings.titleTemplate;
+  return { el, matches };
+}
 
 function renderDisplay() {
   const current = state.settings.displayStyle;
@@ -73,11 +144,12 @@ function renderDisplay() {
       return card;
     }),
   );
-  const style = DISPLAY_STYLES[current] ?? DISPLAY_STYLES.detailed;
-  $("display-preview").replaceChildren(
-    h("div", { class: "preview-name" }, style.name),
-    h("div", { class: "preview-title" }, style.title),
-  );
+  if (current !== "custom") editor = null;
+  else if (!editor?.matches()) editor = templateEditor();
+  // Re-inserting the same element would still take focus away.
+  const box = $("display-editor");
+  if (box.firstChild !== (editor?.el ?? null)) box.replaceChildren(...(editor ? [editor.el] : []));
+  showPreview();
 }
 
 // ---------- Updates ----------
@@ -155,6 +227,8 @@ async function setUpUpdates() {
 
 export async function startApp(rerunSetup: () => void) {
   $("version").textContent = `Version ${(await api.appInfo()).version}`;
+  // Before anything renders the display page, so its editor has the list of details.
+  labelInfo = await api.streamLabelInfo().catch(() => null);
   $("rerun-setup").onclick = rerunSetup;
   $("export-settings").onclick = exportSettings;
   $("import-settings").onclick = importSettings;

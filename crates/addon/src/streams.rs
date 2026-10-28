@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use crate::{
     config::Preferences,
     debrid::Service,
-    filters,
+    filters, labels,
     torrent::{format_size, resolution_label, Episode, Torrent},
 };
 
@@ -52,6 +52,33 @@ pub fn compare(a_cached: bool, a: &Torrent, b_cached: bool, b: &Torrent, prefs: 
 
 pub fn stream(base_url: &str, service: Service, cached: bool, torrent: &Torrent, episode: Option<Episode>) -> Value {
     stream_with_style(base_url, service, cached, torrent, episode, "detailed")
+}
+
+/// The stream in the user's chosen display style, including their own templates.
+pub fn stream_for(
+    base_url: &str,
+    service: Service,
+    cached: bool,
+    torrent: &Torrent,
+    episode: Option<Episode>,
+    prefs: &Preferences,
+) -> Value {
+    let mut stream = stream_with_style(base_url, service, cached, torrent, episode, &prefs.display_style);
+    if prefs.display_style == "custom" {
+        let (name, title) = custom_labels(service, cached, torrent, prefs);
+        stream["name"] = json!(name);
+        stream["title"] = json!(title);
+    }
+    stream
+}
+
+/// The name and title from the user's templates. An empty name would hide the stream's
+/// source in the picker, so it falls back to "Matzio".
+pub fn custom_labels(service: Service, cached: bool, torrent: &Torrent, prefs: &Preferences) -> (String, String) {
+    let vars = labels::variables(service, cached, torrent);
+    let name = labels::render(&prefs.name_template, &vars);
+    let name = if name.is_empty() { "Matzio".to_owned() } else { name };
+    (name, labels::render(&prefs.title_template, &vars))
 }
 
 pub fn stream_with_style(
@@ -192,6 +219,16 @@ mod tests {
         assert_eq!(s["name"], "Matzio TB⚡\n1080p");
         assert_eq!(s["title"], "Show.S01.1080p\nShow S01E02 [1080p].mkv\n💾 1.00 GB  👤 10  ⚙️ YTS");
         assert_eq!(s["behaviorHints"]["filename"], "Show S01E02 [1080p].mkv");
+
+        let custom = Preferences {
+            display_style: "custom".into(),
+            name_template: "{service} {resolution}".into(),
+            title_template: "[{seeders} seeders]".into(),
+            ..Preferences::default()
+        };
+        let s = stream_for("http://127.0.0.1:7777", Service::TorBox, true, &t, None, &custom);
+        assert_eq!((s["name"].as_str(), s["title"].as_str()), (Some("TB 1080p"), Some("10 seeders")));
+        assert_eq!(s["url"], "http://127.0.0.1:7777/play/torbox/abc?file=Show%20S01E02%20%5B1080p%5D.mkv");
 
         let compact = stream_with_style("http://127.0.0.1:7777", Service::TorBox, true, &t, None, "compact");
         assert_eq!(compact["name"], "Matzio\n1080p");

@@ -23,9 +23,9 @@ export async function load() {
 }
 
 function preferences(s: Settings): Preferences {
-  const { sortOrder, speedMbps, displayStyle, filters, sources, subtitles } = s;
+  const { sortOrder, speedMbps, displayStyle, nameTemplate, titleTemplate, filters, sources, subtitles } = s;
   // A deep copy, so a change only shows once it's saved.
-  return structuredClone({ sortOrder, speedMbps, displayStyle, filters, sources, subtitles });
+  return structuredClone({ sortOrder, speedMbps, displayStyle, nameTemplate, titleTemplate, filters, sources, subtitles });
 }
 
 export async function savePreferences(change: (p: Preferences) => void) {

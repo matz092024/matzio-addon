@@ -12,6 +12,7 @@
 pub mod config;
 pub mod debrid;
 pub mod filters;
+pub mod labels;
 pub mod sources;
 pub mod streams;
 pub mod subtitles;
@@ -312,7 +313,7 @@ async fn stream(State(state): State<AppState>, Path((kind, file)): Path<(String,
     let list: Vec<_> = candidates
         .into_iter()
         .map(|(service, cached, _, t)| {
-            streams::stream_with_style(&state.base_url, service, cached, t, episode, &prefs.display_style)
+            streams::stream_for(&state.base_url, service, cached, t, episode, prefs)
         })
         .collect();
     Json(json!({ "streams": list })).into_response()

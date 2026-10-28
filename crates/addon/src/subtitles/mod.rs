@@ -367,7 +367,7 @@ pub fn rank(mut found: Vec<Subtitle>, prefs: &Subtitles, languages: &[&'static L
 pub fn release_score(release: &str, video: &Torrent) -> u32 {
     let sub = Torrent::from_name(release);
     let mut score = 0;
-    if let (Some(a), Some(b)) = (group(release), video.filename.as_deref().or(Some(&video.name)).and_then(group)) {
+    if let (Some(a), Some(b)) = (torrent::release_group(release), video.filename.as_deref().or(Some(&video.name)).and_then(torrent::release_group)) {
         if a.eq_ignore_ascii_case(b) {
             score += 8;
         }
@@ -379,18 +379,6 @@ pub fn release_score(release: &str, video: &Torrent) -> u32 {
         score += 2;
     }
     score
-}
-
-/// The release group: the part after the last dash, as in "Movie.2020.1080p.WEB-DL.x264-GROUP".
-fn group(name: &str) -> Option<&str> {
-    let name = name.trim();
-    let name = match name.rsplit_once('.') {
-        Some((stem, ext)) if ext.len() <= 4 && ext.chars().all(|c| c.is_ascii_alphanumeric()) && !ext.chars().all(|c| c.is_ascii_digit()) => stem,
-        _ => name,
-    };
-    let (_, group) = name.rsplit_once('-')?;
-    let group = group.split(['[', ' ', '(']).next()?.trim();
-    (group.len() >= 2 && group.chars().all(|c| c.is_ascii_alphanumeric())).then_some(group)
 }
 
 /// The subtitle as Stremio lists it. Its address points back at this server, which only
@@ -455,14 +443,6 @@ mod tests {
         let codes: Vec<String> = ["de", "xx", "EN", "de", "pt-br"].map(String::from).to_vec();
         let found: Vec<_> = languages(&codes).iter().map(|l| l.code).collect();
         assert_eq!(found, ["de", "en", "pt-br"]);
-    }
-
-    #[test]
-    fn finds_release_groups() {
-        assert_eq!(group("Movie.2020.1080p.WEB-DL.x264-NTb.mkv"), Some("NTb"));
-        assert_eq!(group("Movie 2020 1080p BluRay x265-RARBG"), Some("RARBG"));
-        assert_eq!(group("Movie.2020.1080p.WEB-DL"), Some("DL"));
-        assert_eq!(group("Movie 2020"), None);
     }
 
     #[test]
