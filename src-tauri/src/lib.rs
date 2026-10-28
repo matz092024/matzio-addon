@@ -5,7 +5,11 @@
 mod settings;
 mod updates;
 
-use matzio_addon::{bind, manifest_url, serve, DEFAULT_PORT};
+use std::sync::{Arc, RwLock};
+
+use matzio_addon::{
+    base_url, bind, debrid::Service, manifest_url, serve, AppState, Config, Endpoints, SharedConfig, DEFAULT_PORT,
+};
 use serde::Serialize;
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -88,20 +92,82 @@ async fn install_update(app: AppHandle) -> UpdateStatus {
     updates::install_pending(&app).await
 }
 
-fn start_addon() -> AddonStatus {
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DebridKeys {
+    real_debrid_key: Option<String>,
+    torbox_key: Option<String>,
+}
+
+impl From<&Settings> for DebridKeys {
+    fn from(s: &Settings) -> Self {
+        Self { real_debrid_key: s.real_debrid_key.clone(), torbox_key: s.torbox_key.clone() }
+    }
+}
+
+fn config_from(settings: &Settings) -> Config {
+    Config::new(settings.real_debrid_key.clone(), settings.torbox_key.clone())
+}
+
+#[tauri::command]
+fn get_debrid_keys(store: State<SettingsStore>) -> DebridKeys {
+    DebridKeys::from(&store.get())
+}
+
+#[tauri::command]
+fn set_debrid_keys(
+    store: State<SettingsStore>,
+    config: State<SharedConfig>,
+    real_debrid_key: Option<String>,
+    torbox_key: Option<String>,
+) -> Result<DebridKeys, String> {
+    let clean = |k: Option<String>| k.map(|k| k.trim().to_owned()).filter(|k| !k.is_empty());
+    let saved = store.update(|s| {
+        s.real_debrid_key = clean(real_debrid_key);
+        s.torbox_key = clean(torbox_key);
+    })?;
+    // The running addon picks the new keys up on its next request.
+    *config.write().unwrap() = config_from(&saved);
+    Ok(DebridKeys::from(&saved))
+}
+
+#[derive(Serialize)]
+struct KeyCheck {
+    ok: bool,
+    username: Option<String>,
+    premium: bool,
+    expires: Option<String>,
+    error: Option<String>,
+}
+
+#[tauri::command]
+async fn check_debrid_key(addon: State<'_, AppState>, service: String, key: String) -> Result<KeyCheck, String> {
+    let service = Service::from_slug(&service).ok_or("service must be \"realdebrid\" or \"torbox\"")?;
+    Ok(match addon.check_key(service, &key).await {
+        Ok(a) => KeyCheck { ok: true, username: a.username, premium: a.premium, expires: a.expires, error: None },
+        Err(e) => KeyCheck { ok: false, username: None, premium: false, expires: None, error: Some(e.to_string()) },
+    })
+}
+
+fn start_addon(config: SharedConfig) -> (AppState, AddonStatus) {
     match tauri::async_runtime::block_on(bind(DEFAULT_PORT)) {
         Ok(listener) => {
-            let url = manifest_url(listener.local_addr().expect("bound socket has an address"));
+            let addr = listener.local_addr().expect("bound socket has an address");
+            let state = AppState::new(config, Endpoints::default(), &base_url(addr));
+            let url = manifest_url(addr);
+            let server_state = state.clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = serve(listener).await {
+                if let Err(e) = serve(listener, server_state).await {
                     eprintln!("addon server stopped: {e}");
                 }
             });
-            AddonStatus::Running { manifest_url: url }
+            (state, AddonStatus::Running { manifest_url: url })
         }
-        Err(e) => AddonStatus::Failed {
-            error: format!("Could not use port {DEFAULT_PORT}: {e}"),
-        },
+        Err(e) => {
+            // Still build the state so keys can be checked and saved from the window.
+            let state = AppState::new(config, Endpoints::default(), &format!("http://127.0.0.1:{DEFAULT_PORT}"));
+            (state, AddonStatus::Failed { error: format!("Could not use port {DEFAULT_PORT}: {e}") })
+        }
     }
 }
 
@@ -182,12 +248,19 @@ pub fn run() {
             update_status,
             check_for_updates,
             install_update,
+            get_debrid_keys,
+            set_debrid_keys,
+            check_debrid_key,
         ])
         .setup(|app| {
-            let status = start_addon();
+            let store = SettingsStore::load(app.handle());
+            let config: SharedConfig = Arc::new(RwLock::new(config_from(&store.get())));
+            let (addon, status) = start_addon(config.clone());
             let failed = matches!(status, AddonStatus::Failed { .. });
             app.manage(status);
-            app.manage(SettingsStore::load(app.handle()));
+            app.manage(store);
+            app.manage(config);
+            app.manage(addon);
             app.manage(Updates::default());
             updates::start_background_checks(app.handle().clone());
             build_tray(app.handle())?;

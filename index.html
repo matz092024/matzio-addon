@@ -33,6 +33,22 @@
       </section>
 
       <section class="glass">
+        <h2>Debrid accounts</h2>
+        <p class="subtle small">Your keys stay on this PC. Add at least one.</p>
+        <label class="key">
+          <span class="label">Real-Debrid API key</span>
+          <input id="rd-key" type="password" autocomplete="off" spellcheck="false" placeholder="real-debrid.com/apitoken" />
+          <span class="subtle small key-status" id="rd-status"></span>
+        </label>
+        <label class="key">
+          <span class="label">TorBox API key</span>
+          <input id="tb-key" type="password" autocomplete="off" spellcheck="false" placeholder="torbox.app/settings" />
+          <span class="subtle small key-status" id="tb-status"></span>
+        </label>
+        <button id="save-keys" class="primary" type="button">Save and check</button>
+      </section>
+
+      <section class="glass">
         <h2>Updates</h2>
         <div class="row">
           <div>
@@ -53,7 +69,7 @@
 
       <section class="glass">
         <h2>Coming next</h2>
-        <p class="subtle">Debrid keys, drag-to-rank sorting, how streams look in Stremio, and the internet speed check will live here.</p>
+        <p class="subtle">Drag-to-rank sorting, how streams look in Stremio, and the internet speed check will live here.</p>
       </section>
     </main>
     <script type="module" src="/src/main.ts"></script>

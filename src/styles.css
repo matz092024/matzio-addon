@@ -69,6 +69,14 @@ p:last-child { margin-bottom: 0; }
 .divider { height: 1px; background: var(--stroke); margin: 14px 0; }
 
 .field { display: flex; gap: 8px; margin-bottom: 12px; }
+.key { display: grid; gap: 6px; margin-bottom: 14px; }
+.key-status:empty { display: none; }
+input[type="password"] {
+  padding: 10px 14px; border: 1px solid var(--stroke); border-radius: 12px;
+  background: rgba(0, 0, 0, 0.25); color: var(--text); font: inherit; user-select: text;
+}
+input[type="password"]:focus { outline: none; border-color: var(--stroke-strong); }
+#save-keys { width: 100%; }
 input[readonly] {
   flex: 1; min-width: 0; padding: 10px 14px;
   border: 1px solid var(--stroke); border-radius: 12px;
