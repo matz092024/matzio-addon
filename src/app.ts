@@ -143,6 +143,17 @@ function renderUpdate(status: UpdateStatus) {
 }
 
 async function setUpUpdates() {
+  const startup = $<HTMLInputElement>("start-with-windows");
+  startup.checked = state.settings.startWithWindows;
+  startup.addEventListener("change", async () => {
+    try {
+      state.settings = await api.setStartWithWindows(startup.checked);
+    } catch (e) {
+      startup.checked = !startup.checked;
+      alert(`Could not change startup setting: ${e}`);
+    }
+  });
+
   const toggle = $<HTMLInputElement>("auto-update");
   toggle.checked = state.settings.autoUpdate;
   toggle.addEventListener("change", async () => {

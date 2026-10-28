@@ -18,6 +18,7 @@ use tauri::{
 };
 #[cfg(windows)]
 use tauri::window::{Effect, EffectsBuilder};
+use tauri_plugin_autostart::ManagerExt as _;
 use tauri_plugin_opener::OpenerExt;
 
 use settings::{Preferences, Settings, SettingsStore};
@@ -69,6 +70,27 @@ fn app_info(app: AppHandle) -> AppInfo {
 #[tauri::command]
 fn get_settings(store: State<SettingsStore>) -> Settings {
     store.get()
+}
+
+/// Makes Windows' sign-in startup entry match the setting. Debug builds never
+/// register themselves, so `tauri dev` doesn't leave a startup entry behind.
+fn apply_start_with_windows(app: &AppHandle, enabled: bool) -> Result<(), String> {
+    if cfg!(debug_assertions) {
+        return Ok(());
+    }
+    let launcher = app.autolaunch();
+    let registered = launcher.is_enabled().map_err(|e| e.to_string())?;
+    match (enabled, registered) {
+        (true, false) => launcher.enable().map_err(|e| e.to_string()),
+        (false, true) => launcher.disable().map_err(|e| e.to_string()),
+        _ => Ok(()),
+    }
+}
+
+#[tauri::command]
+fn set_start_with_windows(app: AppHandle, store: State<SettingsStore>, enabled: bool) -> Result<Settings, String> {
+    apply_start_with_windows(&app, enabled)?;
+    store.update(|s| s.start_with_windows = enabled)
 }
 
 #[tauri::command]
@@ -254,6 +276,7 @@ pub fn run() {
     tauri::Builder::default()
         // A second launch just brings up the running instance's settings.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| open_settings(app)))
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
@@ -270,6 +293,7 @@ pub fn run() {
             get_debrid_keys,
             set_debrid_keys,
             check_debrid_key,
+            set_start_with_windows,
         ])
         .setup(|app| {
             let store = SettingsStore::load(app.handle());
@@ -278,6 +302,9 @@ pub fn run() {
             let failed = matches!(status, AddonStatus::Failed { .. });
             app.manage(status);
             let first_run = !store.get().setup_complete;
+            if let Err(e) = apply_start_with_windows(app.handle(), store.get().start_with_windows) {
+                eprintln!("could not update the Windows startup entry: {e}");
+            }
             app.manage(store);
             app.manage(config);
             app.manage(addon);

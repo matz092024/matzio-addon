@@ -12,6 +12,8 @@ use tauri::{AppHandle, Manager};
 pub struct Settings {
     /// Download and install updates without asking.
     pub auto_update: bool,
+    /// Launch Matzio (to the tray) when the user signs in to Windows.
+    pub start_with_windows: bool,
     /// Debrid API keys, kept only in this file on the user's PC.
     pub real_debrid_key: Option<String>,
     pub torbox_key: Option<String>,
@@ -25,6 +27,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             auto_update: true,
+            start_with_windows: true,
             real_debrid_key: None,
             torbox_key: None,
             setup_complete: false,
