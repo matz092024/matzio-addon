@@ -5,7 +5,7 @@ use std::{sync::Mutex, time::Duration};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
-use tauri_plugin_updater::{Update, UpdaterExt};
+use tauri_plugin_updater::{Error as UpdaterError, Update, UpdaterExt};
 
 use crate::settings::SettingsStore;
 
@@ -18,6 +18,8 @@ pub enum UpdateStatus {
     NotChecked,
     Checking,
     UpToDate,
+    /// The update server answered but has no release yet (e.g. a 404 before the first one).
+    NoRelease,
     Available { version: String },
     Installing { version: String },
     Failed { error: String },
@@ -67,6 +69,7 @@ pub async fn check(app: &AppHandle, install: bool) -> UpdateStatus {
             }
             UpdateStatus::Available { version }
         }
+        Err(UpdaterError::ReleaseNotFound) => UpdateStatus::NoRelease,
         Err(e) => UpdateStatus::Failed { error: e.to_string() },
     };
     set_status(app, status.clone());
