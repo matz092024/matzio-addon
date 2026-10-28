@@ -3,6 +3,7 @@
 
 use std::{fs, path::PathBuf, sync::Mutex};
 
+pub use matzio_addon::Preferences;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
@@ -28,36 +29,6 @@ impl Default for Settings {
             torbox_key: None,
             setup_complete: false,
             preferences: Preferences::default(),
-        }
-    }
-}
-
-/// How streams are picked and shown. The settings window saves these as one unit.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(default, rename_all = "camelCase")]
-pub struct Preferences {
-    /// Sort keys, most important first: "cached", "resolution", "language", "size", "quality", "seeders".
-    pub sort_order: Vec<String>,
-    /// Measured or typed download speed in megabits per second.
-    pub speed_mbps: Option<f64>,
-    /// Hide streams whose bitrate (size / runtime) is more than the connection can play.
-    pub filter_by_speed: bool,
-    /// Resolutions or sources never to show, such as "480p" or "cam".
-    pub exclude_resolutions: Vec<String>,
-    /// How a stream is labelled in Stremio's picker: "compact" or "detailed".
-    pub display_style: String,
-}
-
-impl Default for Preferences {
-    fn default() -> Self {
-        Self {
-            sort_order: ["cached", "resolution", "language", "size", "quality", "seeders"]
-                .map(String::from)
-                .to_vec(),
-            speed_mbps: None,
-            filter_by_speed: true,
-            exclude_resolutions: vec!["cam".into()],
-            display_style: "detailed".into(),
         }
     }
 }
