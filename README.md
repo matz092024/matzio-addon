@@ -52,7 +52,7 @@ only installs files signed with the key whose public half is in
 To publish a release:
 
 1. Bump `version` in `package.json` (the app reads its version from there).
-2. Merge to `main`, then push a matching tag, e.g. `git tag v0.2.0 && git push origin v0.2.0`.
-3. The **Release** workflow builds, signs, and publishes the installer and
-   `latest.json`. It needs the `TAURI_SIGNING_PRIVATE_KEY` repository secret
+2. Merge to `main`. The **Release** workflow sees a version with no release
+   yet, then builds, signs, and publishes the installer and `latest.json`
+   under a `v<version>` tag. It can also be started by hand from the Actions tab. It needs the `TAURI_SIGNING_PRIVATE_KEY` repository secret
    (and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` if the key has a password).

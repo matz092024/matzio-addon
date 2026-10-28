@@ -1,42 +1,54 @@
 name: Release
 
-# Push a tag like v0.2.0 (matching the version in package.json) to publish a
-# signed release. Installed copies pick it up through latest.json.
+# Publishes a signed release whenever main carries a version (package.json)
+# that has no release yet. Installed copies pick it up through latest.json.
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
+    paths: [package.json, .github/workflows/release.yml]
+  workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency: release
 
 jobs:
   windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Check tag matches package.json version
+      - name: Read version
+        id: version
         shell: bash
         run: |
           version=$(node -p "require('./package.json').version")
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "Tag $GITHUB_REF_NAME does not match package.json version $version" >&2
-            exit 1
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null; then
+            echo "v$version is already released; nothing to do."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/setup-node@v4
+      - if: steps.version.outputs.exists != 'true'
+        uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: npm ci
-      - uses: tauri-apps/tauri-action@v0
+      - if: steps.version.outputs.exists != 'true'
+        uses: dtolnay/rust-toolchain@stable
+      - if: steps.version.outputs.exists != 'true'
+        uses: Swatinem/rust-cache@v2
+      - if: steps.version.outputs.exists != 'true'
+        run: npm ci
+      - if: steps.version.outputs.exists != 'true'
+        uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: Matzio ${{ github.ref_name }}
+          tagName: ${{ steps.version.outputs.tag }}
+          releaseName: Matzio ${{ steps.version.outputs.tag }}
           releaseBody: See the commits since the last release for what changed.
+          releaseCommitish: ${{ github.sha }}
           releaseDraft: false
           includeUpdaterJson: true
