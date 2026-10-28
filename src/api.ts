@@ -49,6 +49,8 @@ export type Preferences = {
   sortOrder: string[];
   speedMbps: number | null;
   displayStyle: string;
+  nameTemplate: string;
+  titleTemplate: string;
   filters: Filters;
   sources: Sources;
   subtitles: Subtitles;
@@ -90,6 +92,10 @@ export const api = {
   getDebridKeys: () => invoke<DebridKeys>("get_debrid_keys"),
   setDebridKeys: (keys: DebridKeys) => invoke<DebridKeys>("set_debrid_keys", keys),
   checkDebridKey: (service: DebridService, key: string) => invoke<KeyCheck>("check_debrid_key", { service, key }),
+  previewStreamLabel: (displayStyle: string, nameTemplate: string, titleTemplate: string) =>
+    invoke<{ name: string; title: string }>("preview_stream_label", { displayStyle, nameTemplate, titleTemplate }),
+  streamLabelInfo: () =>
+    invoke<{ variables: [string, string][]; defaultName: string; defaultTitle: string }>("stream_label_info"),
   getSubtitleKeys: () => invoke<SubtitleKeys>("get_subtitle_keys"),
   setSubtitleKeys: (keys: SubtitleKeys) => invoke<SubtitleKeys>("set_subtitle_keys", { keys }),
   checkSubtitleKey: (provider: SubtitleProvider, keys: SubtitleKeys) => invoke<SubtitleCheck>("check_subtitle_key", { provider, keys }),

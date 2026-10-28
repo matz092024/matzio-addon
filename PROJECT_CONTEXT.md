@@ -38,6 +38,7 @@ crates/addon/            Stremio addon server (Rust library, axum)
                          /subtitles/... (list), /subtitle/{provider}/{file}.srt (download)
   src/config.rs          debrid keys + preferences (shared, live-updated) + service base URLs
   src/streams.rs         ranks and formats Stremio stream entries
+  src/labels.rs          the "custom" display style: {variable} templates, [optional parts]
   src/torrent.rs         parses torrent titles (resolution, quality, languages, HDR, codec, audio...)
   src/filters.rs         the user's checks (hide / show at bottom), preference ranking, result limits
   src/sources/addon.rs       Stremio-addon sources (Torrentio, Comet, MediaFusion)
@@ -146,6 +147,16 @@ kept 3 h (OpenSubtitles counts downloads: 5/day with a key, 20/day signed in). T
 OpenSubtitles and SubDL request formats were written from their docs without live
 access; check them on a real install. Users who installed the addon in Stremio before
 0.5 may need to reinstall it once so Stremio sees the new subtitles resource.
+
+## Custom stream labels (PR pending)
+
+`displayStyle` can be `compact`, `detailed` or `custom`. Custom uses `nameTemplate` (left
+column in Stremio's picker) and `titleTemplate` (description) from preferences, filled by
+`labels.rs`: `{variable}` names are listed in `labels::VARIABLES`, a `[part]` is dropped
+when a variable in it is empty, unknown `{words}` stay as typed, empty lines are dropped.
+The settings window previews labels through the `preview_stream_label` command, so the
+preview is rendered by the same Rust code as the addon. Templates are part of exported
+settings.
 
 ## Known caveats
 

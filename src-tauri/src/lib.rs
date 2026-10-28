@@ -8,7 +8,7 @@ mod updates;
 use std::sync::{Arc, RwLock};
 
 use matzio_addon::{
-    base_url, bind, debrid::Service, manifest_url, serve, subtitles::Provider, AppState, Config, Endpoints,
+    base_url, bind, debrid::Service, labels, manifest_url, serve, streams, subtitles::Provider, AppState, Config, Endpoints,
     SharedConfig, DEFAULT_PORT,
 };
 use serde::Serialize;
@@ -190,6 +190,36 @@ async fn check_debrid_key(addon: State<'_, AppState>, service: String, key: Stri
     })
 }
 
+#[derive(Serialize)]
+struct LabelPreview {
+    name: String,
+    title: String,
+}
+
+/// How a made-up stream looks in Stremio's picker with these display settings.
+#[tauri::command]
+fn preview_stream_label(display_style: String, name_template: String, title_template: String) -> LabelPreview {
+    let prefs = Preferences { display_style, name_template, title_template, ..Preferences::default() };
+    let s = streams::stream_for("", Service::RealDebrid, true, &labels::sample(), None, &prefs);
+    LabelPreview {
+        name: s["name"].as_str().unwrap_or_default().to_owned(),
+        title: s["title"].as_str().unwrap_or_default().to_owned(),
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LabelInfo {
+    variables: Vec<(&'static str, &'static str)>,
+    default_name: &'static str,
+    default_title: &'static str,
+}
+
+#[tauri::command]
+fn stream_label_info() -> LabelInfo {
+    LabelInfo { variables: labels::VARIABLES.to_vec(), default_name: labels::DEFAULT_NAME, default_title: labels::DEFAULT_TITLE }
+}
+
 #[tauri::command]
 fn get_subtitle_keys(store: State<SettingsStore>) -> SubtitleKeys {
     store.get().subtitle_keys
@@ -328,6 +358,8 @@ pub fn run() {
             check_debrid_key,
             get_subtitle_keys,
             set_subtitle_keys,
+            preview_stream_label,
+            stream_label_info,
             check_subtitle_key,
             set_start_with_windows,
         ])

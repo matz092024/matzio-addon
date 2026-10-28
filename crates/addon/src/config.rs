@@ -73,8 +73,11 @@ pub struct Preferences {
     pub sort_order: Vec<String>,
     /// Measured or typed download speed in megabits per second.
     pub speed_mbps: Option<f64>,
-    /// How a stream is labelled in Stremio's picker: "compact" or "detailed".
+    /// How a stream is labelled in Stremio's picker: "compact", "detailed" or "custom".
     pub display_style: String,
+    /// The "custom" style's two lines of text: see [`crate::labels`].
+    pub name_template: String,
+    pub title_template: String,
     pub filters: Filters,
     pub sources: Sources,
     pub subtitles: Subtitles,
@@ -163,6 +166,8 @@ impl Default for Preferences {
             sort_order: SORT_KEYS.map(String::from).to_vec(),
             speed_mbps: None,
             display_style: "detailed".into(),
+            name_template: crate::labels::DEFAULT_NAME.into(),
+            title_template: crate::labels::DEFAULT_TITLE.into(),
             filters: Filters::default(),
             sources: Sources::default(),
             subtitles: Subtitles::default(),
@@ -305,6 +310,8 @@ struct SavedPreferences {
     sort_order: Option<Vec<String>>,
     speed_mbps: Option<f64>,
     display_style: Option<String>,
+    name_template: Option<String>,
+    title_template: Option<String>,
     filters: Option<Filters>,
     sources: Sources,
     subtitles: Subtitles,
@@ -337,6 +344,8 @@ impl From<SavedPreferences> for Preferences {
             sort_order,
             speed_mbps: saved.speed_mbps,
             display_style: saved.display_style.unwrap_or(defaults.display_style),
+            name_template: saved.name_template.unwrap_or(defaults.name_template),
+            title_template: saved.title_template.unwrap_or(defaults.title_template),
             filters,
             sources: saved.sources,
             subtitles: saved.subtitles,
