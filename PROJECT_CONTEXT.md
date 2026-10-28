@@ -140,8 +140,6 @@ rank streams through the matching sort key. Settings from 0.3 and older
 - Settings export/import (Home): sorting, display, filters and source switches
   only. Never debrid keys, custom source URLs or the measured speed.
 - The addon listens on `127.0.0.1` only, so phones and TVs cannot reach it yet.
-- Pointer drag-to-rank in the sorting list does not respond in testing (to be
-  fixed; `Alt+Up/Down` keyboard reordering is also wired).
 
 ## Roadmap
 
