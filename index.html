@@ -7,71 +7,159 @@
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
-    <main>
-      <header>
-        <div>
-          <h1>Matzio</h1>
-          <p class="subtle" id="version"></p>
+    <!-- First-run setup: one step visible at a time. -->
+    <div id="wizard" class="wizard" hidden>
+      <div class="steps" id="step-dots"></div>
+
+      <section class="step" data-step="welcome">
+        <img class="logo big-logo" src="/logo.png" alt="" />
+        <h1 class="display">Welcome to Matzio</h1>
+        <p class="lead">Your own streaming addon for Stremio, running quietly on this PC. Setup takes about two minutes: connect your debrid service, check your internet speed, choose how streams are sorted, and install.</p>
+        <button class="primary wide" data-next type="button">Get started</button>
+      </section>
+
+      <section class="step" data-step="debrid">
+        <h1 class="display">Connect your debrid service</h1>
+        <p class="lead">Matzio checks which streams are already cached by your debrid service, so they play instantly. Add one or both.</p>
+        <div class="debrid-cards" data-debrid></div>
+      </section>
+
+      <section class="step" data-step="speed">
+        <h1 class="display">How fast is your internet?</h1>
+        <p class="lead">Matzio uses this to skip streams too big to play smoothly. A 4K film needs far more than a 1080p episode, so it compares each file's size with its runtime.</p>
+        <div class="glass speed-card" data-speed></div>
+      </section>
+
+      <section class="step" data-step="sorting">
+        <h1 class="display">What matters most to you?</h1>
+        <p class="lead">Drag to rank. Streams are compared on the top item first, and the next ones break ties. You can change this any time.</p>
+        <div class="rank-wrap" data-sorting></div>
+      </section>
+
+      <section class="step" data-step="install">
+        <img class="logo big-logo" src="/logo.png" alt="" />
+        <h1 class="display">Add Matzio to Stremio</h1>
+        <p class="lead">Stremio opens and asks you to confirm. You only do this once; Matzio keeps working whenever it's in your tray.</p>
+        <div data-install></div>
+      </section>
+
+      <footer class="wizard-nav">
+        <button class="ghost" id="wizard-back" type="button">Back</button>
+        <button class="link" id="wizard-skip" type="button">Skip setup</button>
+        <button class="primary" id="wizard-next" type="button">Continue</button>
+      </footer>
+    </div>
+
+    <!-- The app after setup: sidebar of sections. -->
+    <div id="app" class="app" hidden>
+      <nav class="sidebar">
+        <div class="brand"><img class="logo" src="/logo.png" alt="" /><b>Matzio</b></div>
+        <button class="nav-item" data-page="home" type="button"><span class="icon">◉</span>Home</button>
+        <button class="nav-item" data-page="debrid" type="button"><span class="icon">⚿</span>Debrid</button>
+        <button class="nav-item" data-page="sorting" type="button"><span class="icon">⇅</span>Sorting</button>
+        <button class="nav-item" data-page="filters" type="button"><span class="icon">⧩</span>Filters</button>
+        <button class="nav-item" data-page="display" type="button"><span class="icon">✎</span>Stream display</button>
+        <button class="nav-item" data-page="connection" type="button"><span class="icon">⇣</span>Connection</button>
+        <button class="nav-item" data-page="updates" type="button"><span class="icon">⟳</span>Updates</button>
+        <div class="sidebar-foot">
+          <span class="pill" id="status"><span class="dot"></span><span id="status-text">Checking…</span></span>
+          <div class="subtle small" id="version"></div>
         </div>
-        <span class="pill" id="status"><span class="dot"></span><span id="status-text">Checking…</span></span>
-      </header>
+      </nav>
 
-      <section class="glass" id="install" hidden>
-        <h2>Add to Stremio</h2>
-        <p class="subtle">Matzio runs on this PC. Install it in Stremio once, and it keeps working while Matzio is in your tray.</p>
-        <div class="field">
-          <input id="manifest-url" readonly aria-label="Addon link" />
-          <button id="copy" class="ghost" type="button">Copy</button>
-        </div>
-        <button id="install-button" class="primary" type="button">Install in Stremio</button>
-      </section>
-
-      <section class="glass" id="error" hidden>
-        <h2>The addon could not start</h2>
-        <p id="error-text"></p>
-        <p class="subtle">Close whatever is using that port, then quit Matzio from the tray and start it again.</p>
-      </section>
-
-      <section class="glass">
-        <h2>Debrid accounts</h2>
-        <p class="subtle small">Your keys stay on this PC. Add at least one.</p>
-        <label class="key">
-          <span class="label">Real-Debrid API key</span>
-          <input id="rd-key" type="password" autocomplete="off" spellcheck="false" placeholder="real-debrid.com/apitoken" />
-          <span class="subtle small key-status" id="rd-status"></span>
-        </label>
-        <label class="key">
-          <span class="label">TorBox API key</span>
-          <input id="tb-key" type="password" autocomplete="off" spellcheck="false" placeholder="torbox.app/settings" />
-          <span class="subtle small key-status" id="tb-status"></span>
-        </label>
-        <button id="save-keys" class="primary" type="button">Save and check</button>
-      </section>
-
-      <section class="glass">
-        <h2>Updates</h2>
-        <div class="row">
-          <div>
-            <div class="label">Install updates automatically</div>
-            <div class="subtle small">Matzio checks every few hours and restarts itself to update.</div>
+      <main class="content">
+        <section class="page" data-page="home">
+          <h1>Home</h1>
+          <p class="subtle">Matzio runs on this PC and answers Stremio from your tray.</p>
+          <div class="glass" id="error" hidden>
+            <h2>The addon could not start</h2>
+            <p id="error-text"></p>
+            <p class="subtle">Close whatever is using that port, then quit Matzio from the tray and start it again.</p>
           </div>
-          <label class="switch">
-            <input type="checkbox" id="auto-update" />
-            <span class="track"><span class="thumb"></span></span>
-          </label>
-        </div>
-        <div class="divider"></div>
-        <div class="row">
-          <div class="subtle small" id="update-text">Not checked yet</div>
-          <button id="update-button" class="ghost" type="button">Check now</button>
-        </div>
-      </section>
+          <div class="glass" data-install></div>
+          <div class="glass row">
+            <div>
+              <div class="label">Setup guide</div>
+              <div class="subtle small">Walk through debrid, speed, sorting and install again.</div>
+            </div>
+            <button class="ghost" id="rerun-setup" type="button">Run setup</button>
+          </div>
+        </section>
 
-      <section class="glass">
-        <h2>Coming next</h2>
-        <p class="subtle">Drag-to-rank sorting, how streams look in Stremio, and the internet speed check will live here.</p>
-      </section>
-    </main>
+        <section class="page" data-page="debrid">
+          <h1>Debrid</h1>
+          <p class="subtle">Accounts Matzio uses to find cached streams and play them instantly.</p>
+          <div class="debrid-cards" data-debrid></div>
+        </section>
+
+        <section class="page" data-page="sorting">
+          <h1>Sorting</h1>
+          <p class="subtle">Drag to rank what matters most. Streams are compared on #1 first, then #2 to break ties, and so on.</p>
+          <div class="rank-wrap" data-sorting></div>
+        </section>
+
+        <section class="page" data-page="filters">
+          <h1>Filters</h1>
+          <p class="subtle">Streams that never show up in Stremio's list.</p>
+          <div class="glass">
+            <div class="row">
+              <div>
+                <div class="label">Hide streams too big for my connection</div>
+                <div class="subtle small" id="speed-filter-hint"></div>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="filter-by-speed" />
+                <span class="track"><span class="thumb"></span></span>
+              </label>
+            </div>
+          </div>
+          <div class="glass">
+            <h2>Hide these qualities</h2>
+            <div class="chips" id="exclude-chips"></div>
+          </div>
+        </section>
+
+        <section class="page" data-page="display">
+          <h1>Stream display</h1>
+          <p class="subtle">How each stream is labelled in Stremio's picker.</p>
+          <div class="choice-grid" id="display-choices"></div>
+          <div>
+            <div class="label preview-label">Preview</div>
+            <div class="stremio-preview" id="display-preview"></div>
+          </div>
+        </section>
+
+        <section class="page" data-page="connection">
+          <h1>Connection</h1>
+          <p class="subtle">Your download speed decides which files are small enough to play smoothly.</p>
+          <div class="glass speed-card" data-speed></div>
+        </section>
+
+        <section class="page" data-page="updates">
+          <h1>Updates</h1>
+          <p class="subtle">Matzio updates itself from its GitHub releases.</p>
+          <div class="glass">
+            <div class="row">
+              <div>
+                <div class="label">Install updates automatically</div>
+                <div class="subtle small">Matzio checks every few hours and restarts itself to update.</div>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="auto-update" />
+                <span class="track"><span class="thumb"></span></span>
+              </label>
+            </div>
+            <div class="divider"></div>
+            <div class="row">
+              <div class="subtle small" id="update-text">Not checked yet</div>
+              <button id="update-button" class="ghost" type="button">Check now</button>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div class="toast" id="toast" role="status"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
