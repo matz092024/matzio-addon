@@ -82,8 +82,14 @@ fn set_setup_complete(store: State<SettingsStore>, complete: bool) -> Result<Set
 }
 
 #[tauri::command]
-fn save_preferences(store: State<SettingsStore>, preferences: Preferences) -> Result<Settings, String> {
-    store.update(|s| s.preferences = preferences)
+fn save_preferences(
+    store: State<SettingsStore>,
+    config: State<SharedConfig>,
+    preferences: Preferences,
+) -> Result<Settings, String> {
+    let saved = store.update(|s| s.preferences = preferences)?;
+    *config.write().unwrap() = config_from(&saved);
+    Ok(saved)
 }
 
 #[tauri::command]
@@ -117,6 +123,7 @@ impl From<&Settings> for DebridKeys {
 
 fn config_from(settings: &Settings) -> Config {
     Config::new(settings.real_debrid_key.clone(), settings.torbox_key.clone())
+        .with_preferences(settings.preferences.clone())
 }
 
 #[tauri::command]

@@ -1,5 +1,5 @@
 //! End-to-end tests of the addon routes against local mocks of Torrentio,
-//! TorBox and Real-Debrid.
+//! Cinemeta, TorBox and Real-Debrid.
 
 use std::{
     collections::HashSet,
@@ -23,7 +23,7 @@ const CACHED: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const UNCACHED: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const BASE: &str = "http://127.0.0.1:7777";
 
-/// Starts a mock of the three upstream services and returns its base URL and
+/// Starts a mock of the upstream services and returns its base URL and
 /// a log of the calls that change state on a debrid account.
 async fn mock_upstreams() -> (String, Arc<Mutex<Vec<String>>>) {
     let calls = Arc::new(Mutex::new(Vec::new()));
@@ -38,6 +38,14 @@ async fn mock_upstreams() -> (String, Arc<Mutex<Vec<String>>>) {
                   "behaviorHints": { "filename": "Movie.2020.2160p.WEB.mkv" } },
                 { "name": "Torrentio\n2160p", "title": "dupe\n👤 1", "infoHash": CACHED }
             ]}))
+        }),
+    );
+
+    let cinemeta = Router::new().route(
+        "/cinemeta/meta/{kind}/{id}",
+        get(|Path((kind, _id)): Path<(String, String)>| async move {
+            let runtime = if kind == "series" { "45 min" } else { "120 min" };
+            Json(json!({ "meta": { "runtime": runtime } }))
         }),
     );
 
@@ -139,7 +147,7 @@ async fn mock_upstreams() -> (String, Arc<Mutex<Vec<String>>>) {
             post(|| async { Json(json!({ "download": "https://download.rd.test/movie.mkv" })) }),
         );
 
-    let app = torrentio.merge(torbox).merge(rd);
+    let app = torrentio.merge(cinemeta).merge(torbox).merge(rd);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await });
@@ -150,6 +158,7 @@ async fn state(rd: Option<&str>, torbox: Option<&str>) -> (AppState, Arc<Mutex<V
     let (mock, calls) = mock_upstreams().await;
     let endpoints = Endpoints {
         torrentio: format!("{mock}/torrentio"),
+        cinemeta: format!("{mock}/cinemeta"),
         torbox: format!("{mock}/torbox"),
         real_debrid: format!("{mock}/rd"),
     };
@@ -233,6 +242,47 @@ async fn lists_ranked_real_debrid_results_without_duplicates() {
     let names: Vec<_> = streams.iter().map(|s| s["name"].as_str().unwrap()).collect();
     assert_eq!(names, ["Matzio RD\n4K", "Matzio RD\n720p"]);
     assert!(streams[1]["url"].as_str().unwrap().ends_with(&format!("/play/realdebrid/{UNCACHED}?s=1&e=2")));
+}
+
+#[tokio::test]
+async fn applies_preferences_for_sorting_filters_speed_and_display() {
+    let (state, _) = state(Some("rd-key"), None).await;
+    let app = router(state.clone());
+
+    // Sort by seeders first, and use compact display style.
+    state.config.write().unwrap().preferences = Preferences {
+        sort_order: vec!["seeders".into()],
+        display_style: "compact".into(),
+        ..Preferences::default()
+    };
+    let (_, body) = get_json(&app, "/stream/movie/tt0111161.json").await;
+    let streams = body.unwrap()["streams"].as_array().unwrap().clone();
+    assert_eq!(streams.len(), 2);
+    assert_eq!(streams[0]["name"], "Matzio\n720p");
+    assert_eq!(streams[0]["title"], "1.10 GB · RD");
+    assert_eq!(streams[1]["name"], "Matzio\n4K");
+    assert_eq!(streams[1]["title"], "15.20 GB · RD");
+
+    // Exclude 4K (2160p).
+    state.config.write().unwrap().preferences = Preferences {
+        exclude_resolutions: vec!["2160p".into()],
+        ..Preferences::default()
+    };
+    let (_, body) = get_json(&app, "/stream/movie/tt0111161.json").await;
+    let streams = body.unwrap()["streams"].as_array().unwrap().clone();
+    assert_eq!(streams.len(), 1);
+    assert_eq!(streams[0]["name"], "Matzio RD\n720p");
+
+    // Speed filter with 10 Mbps on a 120-min movie (~9 GB cap) hides the 15.2 GB 4K stream.
+    state.config.write().unwrap().preferences = Preferences {
+        speed_mbps: Some(10.0),
+        filter_by_speed: true,
+        ..Preferences::default()
+    };
+    let (_, body) = get_json(&app, "/stream/movie/tt0111161.json").await;
+    let streams = body.unwrap()["streams"].as_array().unwrap().clone();
+    assert_eq!(streams.len(), 1);
+    assert_eq!(streams[0]["name"], "Matzio RD\n720p");
 }
 
 #[tokio::test]

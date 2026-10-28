@@ -1,8 +1,11 @@
 //! Turns torrent results into the stream list Stremio shows in its picker.
 
+use std::cmp::Ordering;
+
 use serde_json::{json, Value};
 
 use crate::{
+    config::Preferences,
     debrid::Service,
     torrent::{format_size, resolution_label, Episode, Torrent},
 };
@@ -10,12 +13,55 @@ use crate::{
 /// Most results listed per debrid service.
 pub const MAX_PER_SERVICE: usize = 25;
 
-/// Best first: higher resolution, then more seeders.
+/// Best first using the default sort order.
 pub fn rank(torrents: &mut [Torrent]) {
-    torrents.sort_by(|a, b| b.resolution().cmp(&a.resolution()).then(b.seeders.cmp(&a.seeders)));
+    rank_by(torrents, &Preferences::default().sort_order);
+}
+
+/// Ranks torrents according to the user's ordered sort keys.
+pub fn rank_by(torrents: &mut [Torrent], sort_order: &[String]) {
+    torrents.sort_by(|a, b| compare(false, a, false, b, sort_order));
+}
+
+/// Compares two stream candidates using the user's ordered sort keys.
+pub fn compare(
+    a_cached: bool,
+    a: &Torrent,
+    b_cached: bool,
+    b: &Torrent,
+    sort_order: &[String],
+) -> Ordering {
+    for key in sort_order {
+        let ord = match key.as_str() {
+            "cached" => b_cached.cmp(&a_cached),
+            "resolution" => b.resolution().cmp(&a.resolution()),
+            "language" => b.language().cmp(&a.language()),
+            "size" => b.size_bytes.unwrap_or(0).cmp(&a.size_bytes.unwrap_or(0)),
+            "quality" => b.quality().cmp(&a.quality()),
+            "seeders" => b.seeders.unwrap_or(0).cmp(&a.seeders.unwrap_or(0)),
+            _ => Ordering::Equal,
+        };
+        if ord != Ordering::Equal {
+            return ord;
+        }
+    }
+    b.resolution()
+        .cmp(&a.resolution())
+        .then_with(|| b.seeders.unwrap_or(0).cmp(&a.seeders.unwrap_or(0)))
 }
 
 pub fn stream(base_url: &str, service: Service, cached: bool, torrent: &Torrent, episode: Option<Episode>) -> Value {
+    stream_with_style(base_url, service, cached, torrent, episode, "detailed")
+}
+
+pub fn stream_with_style(
+    base_url: &str,
+    service: Service,
+    cached: bool,
+    torrent: &Torrent,
+    episode: Option<Episode>,
+    display_style: &str,
+) -> Value {
     let res = resolution_label(torrent.resolution());
     let badge = if cached { "⚡" } else { "" };
 
@@ -31,32 +77,46 @@ pub fn stream(base_url: &str, service: Service, cached: bool, torrent: &Torrent,
         url = format!("{url}?{}", query.join("&"));
     }
 
-    let mut details = Vec::new();
-    if let Some(size) = torrent.size_bytes {
-        details.push(format!("💾 {}", format_size(size)));
-    }
-    if let Some(seeders) = torrent.seeders {
-        details.push(format!("👤 {seeders}"));
-    }
-    if let Some(origin) = &torrent.origin {
-        details.push(format!("⚙️ {origin}"));
-    }
-    let mut title = torrent.name.clone();
-    if let Some(file) = torrent.filename.as_ref().filter(|f| **f != torrent.name) {
-        title.push('\n');
-        title.push_str(file);
-    }
-    if !details.is_empty() {
-        title.push('\n');
-        title.push_str(&details.join("  "));
-    }
+    let (name, title) = if display_style == "compact" {
+        let tag = if cached {
+            format!("{} ⚡", service.short_name())
+        } else {
+            service.short_name().to_owned()
+        };
+        let title = match torrent.size_bytes {
+            Some(size) => format!("{} · {tag}", format_size(size)),
+            None => tag,
+        };
+        (format!("Matzio\n{res}"), title)
+    } else {
+        let mut details = Vec::new();
+        if let Some(size) = torrent.size_bytes {
+            details.push(format!("💾 {}", format_size(size)));
+        }
+        if let Some(seeders) = torrent.seeders {
+            details.push(format!("👤 {seeders}"));
+        }
+        if let Some(origin) = &torrent.origin {
+            details.push(format!("⚙️ {origin}"));
+        }
+        let mut title = torrent.name.clone();
+        if let Some(file) = torrent.filename.as_ref().filter(|f| **f != torrent.name) {
+            title.push('\n');
+            title.push_str(file);
+        }
+        if !details.is_empty() {
+            title.push('\n');
+            title.push_str(&details.join("  "));
+        }
+        (format!("Matzio {}{badge}\n{res}", service.short_name()), title)
+    };
 
     let mut hints = json!({ "bingeGroup": format!("matzio-{}-{res}", service.slug()) });
     if let Some(file) = &torrent.filename {
         hints["filename"] = json!(file);
     }
     json!({
-        "name": format!("Matzio {}{badge}\n{res}", service.short_name()),
+        "name": name,
         "title": title,
         "url": url,
         "behaviorHints": hints,
@@ -108,6 +168,18 @@ mod tests {
     }
 
     #[test]
+    fn ranks_by_custom_sort_order() {
+        let mut list = vec![
+            torrent("French 2160p FRENCH BluRay", 500),
+            torrent("Web 1080p WEB-DL", 100),
+            torrent("Remux 1080p BluRay REMUX", 10),
+        ];
+        rank_by(&mut list, &["language".into(), "quality".into(), "resolution".into()]);
+        let names: Vec<_> = list.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, ["Remux 1080p BluRay REMUX", "Web 1080p WEB-DL", "French 2160p FRENCH BluRay"]);
+    }
+
+    #[test]
     fn builds_play_url_with_file_and_episode() {
         let mut t = torrent("Show.S01.1080p", 10);
         t.filename = Some("Show S01E02 [1080p].mkv".into());
@@ -116,5 +188,9 @@ mod tests {
         assert_eq!(s["name"], "Matzio TB⚡\n1080p");
         assert_eq!(s["title"], "Show.S01.1080p\nShow S01E02 [1080p].mkv\n💾 1.00 GB  👤 10  ⚙️ YTS");
         assert_eq!(s["behaviorHints"]["filename"], "Show S01E02 [1080p].mkv");
+
+        let compact = stream_with_style("http://127.0.0.1:7777", Service::TorBox, true, &t, None, "compact");
+        assert_eq!(compact["name"], "Matzio\n1080p");
+        assert_eq!(compact["title"], "1.00 GB · TB ⚡");
     }
 }

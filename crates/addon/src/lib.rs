@@ -32,7 +32,7 @@ use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use tower_http::cors::CorsLayer;
 
-pub use config::{Config, Endpoints, SharedConfig};
+pub use config::{Config, Endpoints, Preferences, SharedConfig};
 use debrid::{DebridError, PlayRequest, Service};
 use torrent::parse_id;
 
@@ -66,6 +66,7 @@ pub struct AppState {
     http: reqwest::Client,
     base_url: Arc<str>,
     links: Arc<Mutex<HashMap<(Service, PlayRequest), (Instant, String)>>>,
+    runtimes: Arc<Mutex<HashMap<String, Duration>>>,
 }
 
 impl AppState {
@@ -85,7 +86,17 @@ impl AppState {
             http,
             base_url: base_url.trim_end_matches('/').into(),
             links: Default::default(),
+            runtimes: Default::default(),
         }
+    }
+
+    async fn runtime(&self, kind: &str, id: &str, imdb_id: &str, episode: Option<torrent::Episode>) -> Option<Duration> {
+        if let Some(d) = self.runtimes.lock().unwrap().get(id).copied() {
+            return Some(d);
+        }
+        let d = sources::cinemeta::runtime(&self.http, &self.endpoints.cinemeta, kind, imdb_id, episode).await?;
+        self.runtimes.lock().unwrap().insert(id.to_owned(), d);
+        Some(d)
     }
 }
 
@@ -118,7 +129,7 @@ async fn home() -> Html<&'static str> {
 async fn stream(State(state): State<AppState>, Path((kind, file)): Path<(String, String)>) -> Response {
     // The id is "tt1234567" for movies or "tt1234567:season:episode" for series.
     let Some(id) = file.strip_suffix(".json") else { return StatusCode::NOT_FOUND.into_response() };
-    let Some((_, episode)) = parse_id(id) else { return StatusCode::NOT_FOUND.into_response() };
+    let Some((imdb_id, episode)) = parse_id(id) else { return StatusCode::NOT_FOUND.into_response() };
     if !matches!((kind.as_str(), episode.is_some()), ("movie", false) | ("series", true)) {
         return StatusCode::NOT_FOUND.into_response();
     }
@@ -128,7 +139,18 @@ async fn stream(State(state): State<AppState>, Path((kind, file)): Path<(String,
         return Json(json!({ "streams": [streams::setup_hint(&state.base_url)] })).into_response();
     }
 
-    let mut torrents = match sources::torrentio::search(&state.http, &state.endpoints.torrentio, &kind, id).await {
+    let prefs = &config.preferences;
+    let speed_limit = prefs.speed_mbps.filter(|&mbps| prefs.filter_by_speed && mbps > 0.0);
+
+    let (search_res, runtime) = tokio::join!(
+        sources::torrentio::search(&state.http, &state.endpoints.torrentio, &kind, id),
+        async {
+            let _ = speed_limit?;
+            state.runtime(&kind, id, imdb_id, episode).await
+        }
+    );
+
+    let mut torrents = match search_res {
         Ok(t) => t,
         Err(e) => {
             eprintln!("torrent search failed for {id}: {e}");
@@ -136,31 +158,46 @@ async fn stream(State(state): State<AppState>, Path((kind, file)): Path<(String,
         }
     };
     let mut seen = HashSet::new();
-    torrents.retain(|t| seen.insert(t.info_hash.clone()));
-    streams::rank(&mut torrents);
+    torrents.retain(|t| {
+        seen.insert(t.info_hash.clone())
+            && !t.is_excluded(&prefs.exclude_resolutions)
+            && match (speed_limit, runtime) {
+                (Some(mbps), Some(rt)) => torrent::fits_speed(t.size_bytes, rt, mbps),
+                _ => true,
+            }
+    });
+    streams::rank_by(&mut torrents, &prefs.sort_order);
 
-    let mut list = Vec::new();
+    let mut candidates: Vec<(Service, bool, &torrent::Torrent)> = Vec::new();
     if let Some(key) = &config.torbox_key {
         let hashes: Vec<_> = torrents.iter().map(|t| t.info_hash.clone()).collect();
         match debrid::torbox::cached(&state.http, &state.endpoints.torbox, key, &hashes).await {
-            Ok(cached) => list.extend(
+            Ok(cached) => candidates.extend(
                 torrents
                     .iter()
                     .filter(|t| cached.contains(&t.info_hash))
                     .take(streams::MAX_PER_SERVICE)
-                    .map(|t| streams::stream(&state.base_url, Service::TorBox, true, t, episode)),
+                    .map(|t| (Service::TorBox, true, t)),
             ),
             Err(e) => eprintln!("TorBox cache check failed: {e}"),
         }
     }
     if config.real_debrid_key.is_some() {
-        list.extend(
+        candidates.extend(
             torrents
                 .iter()
                 .take(streams::MAX_PER_SERVICE)
-                .map(|t| streams::stream(&state.base_url, Service::RealDebrid, false, t, episode)),
+                .map(|t| (Service::RealDebrid, false, t)),
         );
     }
+    candidates.sort_by(|a, b| streams::compare(a.1, a.2, b.1, b.2, &prefs.sort_order));
+
+    let list: Vec<_> = candidates
+        .into_iter()
+        .map(|(service, cached, t)| {
+            streams::stream_with_style(&state.base_url, service, cached, t, episode, &prefs.display_style)
+        })
+        .collect();
     Json(json!({ "streams": list })).into_response()
 }
 

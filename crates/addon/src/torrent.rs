@@ -1,6 +1,6 @@
 //! Torrent results and the helpers for ranking them and picking the right file.
 
-use std::sync::LazyLock;
+use std::{sync::LazyLock, time::Duration};
 
 use regex::Regex;
 
@@ -23,9 +23,58 @@ impl Torrent {
         resolution(&self.name).or_else(|| self.filename.as_deref().and_then(resolution)).unwrap_or(0)
     }
 
+    pub fn quality(&self) -> Quality {
+        quality(&self.name)
+            .or_else(|| self.filename.as_deref().and_then(quality))
+            .unwrap_or(Quality::Unknown)
+    }
+
+    pub fn language(&self) -> Language {
+        match (language(&self.name), self.filename.as_deref().map(language)) {
+            (Language::Foreign, _) | (_, Some(Language::Foreign)) => Language::Foreign,
+            (Language::Multi, _) | (_, Some(Language::Multi)) => Language::Multi,
+            _ => Language::English,
+        }
+    }
+
+    pub fn is_excluded(&self, excludes: &[String]) -> bool {
+        let res = self.resolution();
+        let qual = self.quality();
+        excludes.iter().any(|ex| match ex.to_ascii_lowercase().as_str() {
+            "2160p" | "4k" => res == 2160,
+            "1440p" => res == 1440,
+            "1080p" => res == 1080,
+            "720p" => res == 720,
+            "480p" | "sd" => res <= 576,
+            "cam" => qual == Quality::Cam,
+            "scr" | "screener" => qual == Quality::Screener,
+            _ => false,
+        })
+    }
+
     pub fn magnet(&self) -> String {
         format!("magnet:?xt=urn:btih:{}", self.info_hash)
     }
+}
+
+/// Release source tier, ordered from lowest to highest quality.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Quality {
+    Cam,
+    Screener,
+    Unknown,
+    Tv,
+    Web,
+    BluRay,
+    Remux,
+}
+
+/// Language tier for sorting streams (English preferred over multi-audio over foreign dubs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Language {
+    Foreign,
+    Multi,
+    English,
 }
 
 /// Which season and episode a series request is for.
@@ -66,6 +115,79 @@ pub fn resolution_label(res: u32) -> &'static str {
         480 => "480p",
         _ => "SD",
     }
+}
+
+pub fn quality(text: &str) -> Option<Quality> {
+    static REMUX: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?i)(?:^|[^a-z0-9])(?:remux|bdremux|uhd[ ._-]?remux)(?:$|[^a-z0-9])").unwrap());
+    static CAM: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(?i)(?:^|[^a-z0-9])(?:cam|camrip|hdcam|telesync|hdts|pdvd|telecine|hdtc|workprint)(?:$|[^a-z0-9])",
+        )
+        .unwrap()
+    });
+    static SCR: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?i)(?:^|[^a-z0-9])(?:scr|screener|dvdscr|bdscr|hdscr)(?:$|[^a-z0-9])").unwrap()
+    });
+    static BLURAY: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?i)(?:^|[^a-z0-9])(?:bluray|blu[ ._-]?ray|bdrip|brrip|bdr)(?:$|[^a-z0-9])").unwrap()
+    });
+    static WEB: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?i)(?:^|[^a-z0-9])(?:web[ ._-]?dl|webrip|web)(?:$|[^a-z0-9])").unwrap());
+    static TV: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?i)(?:^|[^a-z0-9])(?:hdtv|pdtv|dsr|dvdrip|dvd)(?:$|[^a-z0-9])").unwrap());
+
+    if REMUX.is_match(text) {
+        Some(Quality::Remux)
+    } else if CAM.is_match(text) {
+        Some(Quality::Cam)
+    } else if SCR.is_match(text) {
+        Some(Quality::Screener)
+    } else if BLURAY.is_match(text) {
+        Some(Quality::BluRay)
+    } else if WEB.is_match(text) {
+        Some(Quality::Web)
+    } else if TV.is_match(text) {
+        Some(Quality::Tv)
+    } else {
+        None
+    }
+}
+
+pub fn language(text: &str) -> Language {
+    static MULTI: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?i)(?:^|[^a-z0-9])(?:multi|dual(?:[ ._-]?audio)?)(?:$|[^a-z0-9])").unwrap());
+    static ENGLISH: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?i)(?:🇬🇧|🇺🇸|(?:^|[^a-z0-9])(?:eng|english)(?:$|[^a-z0-9]))").unwrap());
+    static FOREIGN: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(?i)(?:🇫🇷|🇩🇪|🇪🇸|🇮🇹|🇷🇺|🇮🇳|🇵🇱|🇵🇹|🇧🇷|🇨🇿|🇹🇷|(?:^|[^a-z0-9])(?:french|fra|fre|vff|vfq|truefrench|german|ger|deu|spanish|spa|esp|latino|castellano|italian|ita|russian|rus|dubbed|hindi|hin|tamil|telugu|polish|pol|pldub|portuguese|por|czech|ces|turkish|tur|korean|kor|japanese|jpn)(?:$|[^a-z0-9]))",
+        )
+        .unwrap()
+    });
+
+    let has_multi = MULTI.is_match(text);
+    let has_eng = ENGLISH.is_match(text);
+    let has_foreign = FOREIGN.is_match(text);
+
+    if has_multi || (has_eng && has_foreign) {
+        Language::Multi
+    } else if has_foreign {
+        Language::Foreign
+    } else {
+        Language::English
+    }
+}
+
+/// Whether a torrent of `size_bytes` can stream over `speed_mbps` within `runtime`.
+pub fn fits_speed(size_bytes: Option<u64>, runtime: Duration, speed_mbps: f64) -> bool {
+    let Some(bytes) = size_bytes else { return true };
+    let secs = runtime.as_secs_f64();
+    if secs <= 0.0 || speed_mbps <= 0.0 {
+        return true;
+    }
+    let needed_mbps = (bytes as f64 * 8.0) / (secs * 1_000_000.0);
+    needed_mbps <= speed_mbps
 }
 
 pub fn format_size(bytes: u64) -> String {
@@ -145,6 +267,42 @@ mod tests {
         assert_eq!(resolution("Movie 4K HDR"), Some(2160));
         assert_eq!(resolution("Show.S01E01.720p.WEB"), Some(720));
         assert_eq!(resolution("Movie.DVDRip"), None);
+    }
+
+    #[test]
+    fn reads_quality_and_language() {
+        assert_eq!(quality("Dune.Part.Two.2024.2160p.BluRay.REMUX"), Some(Quality::Remux));
+        assert_eq!(quality("Movie.2024.1080p.BluRay.x264"), Some(Quality::BluRay));
+        assert_eq!(quality("Show.S01E01.1080p.WEB-DL"), Some(Quality::Web));
+        assert_eq!(quality("Movie.2024.1080p.HDCAM"), Some(Quality::Cam));
+        assert_eq!(quality("Movie.2024.DVDSCR.XviD"), Some(Quality::Screener));
+        assert!(Quality::Remux > Quality::BluRay && Quality::BluRay > Quality::Web && Quality::Unknown > Quality::Cam);
+
+        assert_eq!(language("Movie.2024.1080p.WEB"), Language::English);
+        assert_eq!(language("Movie.2024.MULTi.1080p.BluRay"), Language::Multi);
+        assert_eq!(language("Movie.2024.ITA.ENG.1080p"), Language::Multi);
+        assert_eq!(language("Movie.2024.FRENCH.1080p.WEB"), Language::Foreign);
+        assert!(Language::English > Language::Multi && Language::Multi > Language::Foreign);
+    }
+
+    #[test]
+    fn checks_excludes_and_speed_limit() {
+        let cam = Torrent {
+            info_hash: "a".into(),
+            name: "Movie.2024.1080p.HDCAM".into(),
+            filename: None,
+            size_bytes: None,
+            seeders: None,
+            origin: None,
+        };
+        assert!(cam.is_excluded(&["cam".into()]));
+        assert!(cam.is_excluded(&["1080p".into()]));
+        assert!(!cam.is_excluded(&["2160p".into(), "scr".into()]));
+
+        // A 4 GB file needs ~4.8 Mbps over a 2-hour movie, but ~12.7 Mbps over a 45-min episode.
+        let four_gb = Some(4u64 << 30);
+        assert!(fits_speed(four_gb, Duration::from_secs(120 * 60), 10.0));
+        assert!(!fits_speed(four_gb, Duration::from_secs(45 * 60), 10.0));
     }
 
     #[test]

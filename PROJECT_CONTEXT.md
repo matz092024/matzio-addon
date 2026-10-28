@@ -35,10 +35,11 @@ rejected for idle resource use.
 ```
 crates/addon/            Stremio addon server (Rust library, axum)
   src/lib.rs             routes: /manifest.json, /stream/..., /play/{service}/{hash}
-  src/config.rs          debrid keys (shared, live-updated) + service base URLs
-  src/streams.rs         builds Stremio stream entries
-  src/torrent.rs         parses torrent titles (resolution, size, language...)
+  src/config.rs          debrid keys + preferences (shared, live-updated) + service base URLs
+  src/streams.rs         ranks and formats Stremio stream entries
+  src/torrent.rs         parses torrent titles (resolution, quality, language, size...)
   src/sources/torrentio.rs   torrent search source
+  src/sources/cinemeta.rs    runtime lookup for speed-based size filtering
   src/debrid/{realdebrid,torbox}.rs   add torrent, pick file, get direct link
   src/tests.rs           tests against local mock servers
 src-tauri/               Tauri tray app
@@ -58,11 +59,14 @@ index.html, src/*.ts     settings window (Vite + plain TS, no framework)
 ```
 
 How a stream plays: Stremio asks `127.0.0.1:7777` for streams, the addon gets
-torrents from Torrentio, TorBox results are filtered to cached ones (shown
-with ⚡), Real-Debrid results are listed unchecked. Picking one opens
-`/play/{service}/{hash}`, which adds the torrent to the debrid account, picks
-the file (exact name, then episode number, then largest video) and redirects
-to the direct link. Links are cached for 30 minutes.
+torrents from Torrentio, filters excluded resolutions/qualities and files too
+large for the connection's speed over the title's runtime (from Cinemeta),
+ranks them by the user's sort order, and formats them in the chosen display
+style. TorBox results are filtered to cached ones (shown with ⚡), Real-Debrid
+results are listed unchecked. Picking one opens `/play/{service}/{hash}`, which
+adds the torrent to the debrid account, picks the file (exact name, then
+episode number, then largest video) and redirects to the direct link. Links are
+cached for 30 minutes.
 
 Settings live in `%APPDATA%\com.matzio.addon\settings.json`. Debrid keys are
 only ever sent to the debrid service itself.
@@ -103,12 +107,13 @@ through the API, which is why releases are driven by the version bump.
 
 - **v0.2.0 released**: tray app, addon server, signed auto-updates,
   glass settings window.
-- **Merged on main, not yet released**: real streams via Real-Debrid and
+- **Merged on main, tested live**: real streams via Real-Debrid and
   TorBox (PR #5), and the "real app" UI with first-run wizard, sidebar app and
   branded installer (PR #6).
-- **Not tested live yet.** Everything so far is tested only against mocks.
-  Next step: Matz installs the CI build from `main`, tries it with real keys
-  in Stremio, then bump to **0.3.0** to release.
+- **Step 3 implemented**: preferences (`sortOrder`, `speedMbps`,
+  `filterBySpeed`, `excludeResolutions`, `displayStyle`) are wired into the
+  addon `Config` and applied live to stream results (including Cinemeta runtime
+  lookup for speed-based size filtering).
 
 ## Known caveats
 
@@ -117,18 +122,14 @@ through the API, which is why releases are driven by the version bump.
   downloading on the RD account and Stremio shows an error.
 - Only one torrent source (Torrentio).
 - The addon listens on `127.0.0.1` only, so phones and TVs cannot reach it yet.
-- Preferences (`sortOrder`, `speedMbps`, `filterBySpeed`,
-  `excludeResolutions`, `displayStyle`) are saved by the UI but **not yet
-  applied by the addon server**; `crates/addon` `Config` only carries the keys.
+- Pointer drag-to-rank in the sorting list does not respond in testing (to be
+  fixed; `Alt+Up/Down` keyboard reordering is also wired).
 
 ## Roadmap
 
-Step 1 (tray app) and step 2 (debrid streams) are done. Remaining:
+Step 1 (tray app), step 2 (debrid streams) and step 3 (make the settings work)
+are done. Remaining:
 
-- **Step 3: make the settings work.** Pass preferences into the addon
-  `Config`, apply the ranked sort, resolution excludes, the speed + runtime
-  size limit (needs runtime from Cinemeta metadata), and the chosen stream
-  display format.
 - **Step 4: polish and reach.** Start with Windows option (autostart), HTTPS / LAN
   access so phones and TVs running Stremio can use it, more sources.
 - **Later:** Linux build.
