@@ -107,6 +107,9 @@ through the API, which is why releases are driven by the version bump.
 
 ## Current status (2026-10-28)
 
+- **0.4.0**: switchable filters, more sources with switches, settings
+  export/import, working drag-to-rank (PR #11).
+
 - **v0.2.0 released**: tray app, addon server, signed auto-updates,
   glass settings window.
 - **Merged on main, tested live**: real streams via Real-Debrid and
