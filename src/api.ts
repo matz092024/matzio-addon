@@ -17,7 +17,7 @@ export type Preferences = {
   displayStyle: string;
 };
 
-export type Settings = Preferences & { autoUpdate: boolean; setupComplete: boolean };
+export type Settings = Preferences & { autoUpdate: boolean; startWithWindows: boolean; setupComplete: boolean };
 
 export type DebridService = "realdebrid" | "torbox";
 export type DebridKeys = { realDebridKey: string | null; torboxKey: string | null };
@@ -35,6 +35,7 @@ export const api = {
   appInfo: () => invoke<{ version: string }>("app_info"),
   getSettings: () => invoke<Settings>("get_settings"),
   setAutoUpdate: (enabled: boolean) => invoke<Settings>("set_auto_update", { enabled }),
+  setStartWithWindows: (enabled: boolean) => invoke<Settings>("set_start_with_windows", { enabled }),
   setSetupComplete: (complete: boolean) => invoke<Settings>("set_setup_complete", { complete }),
   savePreferences: (preferences: Preferences) => invoke<Settings>("save_preferences", { preferences }),
   updateStatus: () => invoke<UpdateStatus>("update_status"),
