@@ -40,3 +40,19 @@ npm run tauri build    # Windows installer in target/release/bundle/nsis
 
 Every pull request builds the Windows installer in CI; download it from the
 run's **Artifacts** section.
+
+## Releasing and auto-updates
+
+Matzio checks
+`https://github.com/matz092024/matzio-addon/releases/latest/download/latest.json`
+shortly after starting and then every 6 hours. Updates are signed: the app
+only installs files signed with the key whose public half is in
+`src-tauri/tauri.conf.json`.
+
+To publish a release:
+
+1. Bump `version` in `package.json` (the app reads its version from there).
+2. Merge to `main`, then push a matching tag, e.g. `git tag v0.2.0 && git push origin v0.2.0`.
+3. The **Release** workflow builds, signs, and publishes the installer and
+   `latest.json`. It needs the `TAURI_SIGNING_PRIVATE_KEY` repository secret
+   (and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` if the key has a password).
