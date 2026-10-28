@@ -109,6 +109,7 @@ through the API, which is why releases are driven by the version bump.
 
 ## Current status (2026-10-28)
 
+- **0.5.0**: subtitles from OpenSubtitles and SubDL with the user's own keys (PR #14).
 - **0.4.0**: switchable filters, more sources with switches, settings
   export/import, working drag-to-rank (PR #11).
 
@@ -131,7 +132,7 @@ keywords and limits. Each has `enabled` and (except limits) `action`
 rank streams through the matching sort key. Settings from 0.3 and older
 (`filterBySpeed`, `excludeResolutions`) are migrated on load in `config.rs`.
 
-## Subtitles (0.5, PR pending)
+## Subtitles (since 0.5)
 
 Preferences hold `subtitles`: `enabled`, `openSubtitles`/`subdl` switches, ordered
 `languages` (Matzio codes like `en`, `pt-br`), `perLanguage`, and `hearingImpaired` /
