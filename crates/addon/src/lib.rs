@@ -97,6 +97,23 @@ impl AppState {
         }
     }
 
+    /// The debrid link most recently opened for this file, if it is still fresh.
+    fn playing_link(&self, filename: &str, episode: Option<torrent::Episode>) -> Option<String> {
+        let base = |name: &str| name.rsplit(['/', '\\']).next().unwrap_or(name).to_owned();
+        let wanted = base(filename);
+        self.links
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|((_, request), (at, _))| {
+                at.elapsed() < LINK_TTL
+                    && request.filename.as_deref().is_some_and(|f| base(f).eq_ignore_ascii_case(&wanted))
+                    && (episode.is_none() || request.episode() == episode)
+            })
+            .max_by_key(|(_, (at, _))| *at)
+            .map(|(_, (_, link))| link.clone())
+    }
+
     async fn runtime(&self, kind: &str, id: &str, imdb_id: &str, episode: Option<torrent::Episode>) -> Option<Duration> {
         if let Some(d) = self.runtimes.lock().unwrap().get(id).copied() {
             return Some(d);
@@ -402,14 +419,24 @@ async fn list_subtitles(state: AppState, kind: &str, id: &str, extra: HashMap<St
         return Json(json!({ "subtitles": [] })).into_response();
     }
     let languages = subtitles::languages(&prefs.languages);
+    let filename = extra.get("filename").map(String::as_str);
+    // Most players don't send the video's hash; work it out from the link being played,
+    // so OpenSubtitles can point at the subtitle made for this exact file.
+    let video_hash = match extra.get("videoHash") {
+        Some(hash) => Some(hash.clone()),
+        None => match filename.and_then(|f| state.playing_link(f, episode)) {
+            Some(link) => subtitles::video_hash(&state.http, &state.subtitles, &link).await,
+            None => None,
+        },
+    };
     let request = subtitles::Request {
         imdb_id,
         episode,
         languages: &languages,
-        video_hash: extra.get("videoHash").map(String::as_str),
+        video_hash: video_hash.as_deref(),
     };
     let found = subtitles::search(&state.http, &state.endpoints, &state.subtitles, &config.subtitle_keys, prefs, &request).await;
-    let ranked = subtitles::rank(found, prefs, &languages, extra.get("filename").map(String::as_str));
+    let ranked = subtitles::rank(found, prefs, &languages, filename);
     let list: Vec<_> = ranked.iter().map(|s| subtitles::to_stremio(&state.base_url, s, episode)).collect();
     Json(json!({ "subtitles": list })).into_response()
 }

@@ -2176,6 +2176,7 @@ version = "0.6.0"
 dependencies = [
  "axum",
  "flate2",
+ "futures-util",
  "http-body-util",
  "regex",
  "reqwest",

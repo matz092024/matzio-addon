@@ -59,8 +59,8 @@ pub struct Subtitle {
     /// The provider's id for the file: a number for OpenSubtitles, an archive name for SubDL.
     pub file: String,
     pub lang: &'static Lang,
-    /// The release it was made for, used to find the one that is in sync.
-    pub release: String,
+    /// The releases it was made for, used to find the one that is in sync.
+    pub releases: Vec<String>,
     pub hearing_impaired: bool,
     pub machine_translated: bool,
     pub downloads: u64,
@@ -149,8 +149,15 @@ pub struct Request<'a> {
     pub imdb_id: &'a str,
     pub episode: Option<Episode>,
     pub languages: &'a [&'static Lang],
-    /// OpenSubtitles hash of the video, when Stremio could work it out.
+    /// OpenSubtitles hash of the video, from the player or worked out here.
     pub video_hash: Option<&'a str>,
+}
+
+impl<'a> Request<'a> {
+    /// The same request for each language on its own.
+    fn each_language(&self) -> impl Iterator<Item = Request<'a>> + '_ {
+        self.languages.iter().map(|lang| Request { languages: std::slice::from_ref(lang), ..self.clone() })
+    }
 }
 
 #[derive(Debug)]
@@ -184,6 +191,7 @@ const SEARCH_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 const FILE_TTL: Duration = Duration::from_secs(3 * 60 * 60);
 const MAX_CACHED_SEARCHES: usize = 100;
 const MAX_CACHED_FILES: usize = 20;
+const MAX_CACHED_HASHES: usize = 50;
 
 type SearchKey = (String, String, bool, bool);
 
@@ -192,6 +200,8 @@ type SearchKey = (String, String, bool, bool);
 pub struct Cache {
     searches: Mutex<HashMap<SearchKey, (Instant, Vec<Subtitle>)>>,
     files: Mutex<HashMap<(Provider, String, Option<(u32, u32)>), (Instant, File)>>,
+    /// Video hashes worked out from debrid links.
+    hashes: Mutex<HashMap<String, String>>,
     pub(crate) login: opensubtitles::Login,
 }
 
@@ -230,16 +240,23 @@ pub async fn search(
         }
     }
 
+    // One search per language: asked together, the most popular language fills the
+    // provider's page and the others go missing.
+    let singles: Vec<Request> = request.each_language().collect();
     let (os, subdl) = tokio::join!(
-        ask(
+        futures_util::future::join_all(singles.iter().map(|single| ask(
             "OpenSubtitles",
             os_key.is_some(),
-            opensubtitles::search(http, &endpoints.open_subtitles, os_key.unwrap_or_default(), request),
-        ),
-        ask("SubDL", subdl_key.is_some(), subdl::search(http, &endpoints.subdl, subdl_key.unwrap_or_default(), request)),
+            opensubtitles::search(http, &endpoints.open_subtitles, os_key.unwrap_or_default(), single),
+        ))),
+        futures_util::future::join_all(singles.iter().map(|single| ask(
+            "SubDL",
+            subdl_key.is_some(),
+            subdl::search(http, &endpoints.subdl, subdl_key.unwrap_or_default(), single),
+        ))),
     );
-    let complete = os.is_some() && subdl.is_some();
-    let found: Vec<Subtitle> = os.into_iter().chain(subdl).flatten().collect();
+    let complete = os.iter().chain(&subdl).all(Option::is_some);
+    let found: Vec<Subtitle> = os.into_iter().chain(subdl).flatten().flatten().collect();
     if complete {
         let mut searches = cache.searches.lock().unwrap();
         searches.retain(|_, (at, _)| at.elapsed() < SEARCH_TTL);
@@ -342,7 +359,7 @@ pub fn rank(mut found: Vec<Subtitle>, prefs: &Subtitles, languages: &[&'static L
     found.retain(|s| seen.insert((s.provider, s.file.clone())));
 
     let video = filename.map(Torrent::from_name);
-    let score = |s: &Subtitle| video.as_ref().map_or(0, |v| release_score(&s.release, v));
+    let score = |s: &Subtitle| video.as_ref().map_or(0, |v| release_score(&s.releases, v));
     let position = |s: &Subtitle| languages.iter().position(|l| *l == s.lang).unwrap_or(usize::MAX);
     found.sort_by(|a, b| {
         position(a)
@@ -362,12 +379,23 @@ pub fn rank(mut found: Vec<Subtitle>, prefs: &Subtitles, languages: &[&'static L
     found
 }
 
-/// How closely a subtitle's release matches the video, so the one in sync comes first:
-/// the same release group counts most, then the same source (WEB, BluRay...) and resolution.
-pub fn release_score(release: &str, video: &Torrent) -> u32 {
+/// How closely a subtitle's releases match the video, so the one in sync comes first:
+/// the very same release beats everything, then the release group, the source (WEB,
+/// BluRay...), WEB-DL versus WEBRip and the resolution. A different cut, such as Extended
+/// against the theatrical one, runs out of sync, so it counts against.
+pub fn release_score(releases: &[String], video: &Torrent) -> i32 {
+    releases.iter().map(|r| score_release(r, video)).max().unwrap_or(0)
+}
+
+fn score_release(release: &str, video: &Torrent) -> i32 {
+    let video_name = video.filename.as_deref().unwrap_or(&video.name);
+    let (sub_words, video_words) = (words(release), words(video_name));
+    if !sub_words.is_empty() && sub_words == video_words {
+        return 100;
+    }
     let sub = Torrent::from_name(release);
     let mut score = 0;
-    if let (Some(a), Some(b)) = (torrent::release_group(release), video.filename.as_deref().or(Some(&video.name)).and_then(torrent::release_group)) {
+    if let (Some(a), Some(b)) = (torrent::release_group(release), torrent::release_group(video_name)) {
         if a.eq_ignore_ascii_case(b) {
             score += 8;
         }
@@ -375,10 +403,105 @@ pub fn release_score(release: &str, video: &Torrent) -> u32 {
     if sub.quality() == video.quality() && sub.quality() != torrent::Quality::Unknown {
         score += 4;
     }
+    if let (Some(a), Some(b)) = (web_kind(&sub_words), web_kind(&video_words)) {
+        if a == b {
+            score += 2;
+        }
+    }
     if sub.resolution() != 0 && sub.resolution() == video.resolution() {
         score += 2;
     }
+    if editions(&sub_words) != editions(&video_words) {
+        score -= 20;
+    }
     score
+}
+
+/// The lowercase words of a release or file name, without the file extension.
+fn words(name: &str) -> Vec<String> {
+    let name = name.trim();
+    let stem = match name.rsplit_once('.') {
+        Some((stem, ext)) if matches!(ext.to_ascii_lowercase().as_str(), "mkv" | "mp4" | "avi" | "m4v" | "ts" | "srt" | "sub" | "ass" | "ssa" | "vtt") => stem,
+        _ => name,
+    };
+    stem.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_lowercase).collect()
+}
+
+/// WEB-DL and WEBRip of the same episode often differ in timing.
+fn web_kind(words: &[String]) -> Option<&'static str> {
+    if words.iter().any(|w| w == "webrip") {
+        Some("webrip")
+    } else if words.iter().any(|w| w == "webdl") || words.windows(2).any(|p| p[0] == "web" && p[1] == "dl") {
+        Some("webdl")
+    } else {
+        None
+    }
+}
+
+/// Cuts of a film that run to a different length.
+fn editions(words: &[String]) -> Vec<&'static str> {
+    const EDITIONS: &[(&str, &str)] = &[
+        ("extended", "extended"),
+        ("directors", "directors"),
+        ("director", "directors"),
+        ("dc", "directors"),
+        ("unrated", "unrated"),
+        ("uncut", "unrated"),
+        ("theatrical", "theatrical"),
+        ("imax", "imax"),
+    ];
+    let mut found: Vec<&'static str> = EDITIONS.iter().filter(|(w, _)| words.iter().any(|x| x == w)).map(|(_, e)| *e).collect();
+    found.sort_unstable();
+    found.dedup();
+    // "Theatrical" is the plain cut too.
+    found.retain(|e| *e != "theatrical");
+    found
+}
+
+/// Works out the OpenSubtitles hash of a video from its link: the file size plus the
+/// first and last 64 KB read as numbers, fetched with two small range requests.
+pub async fn video_hash(http: &reqwest::Client, cache: &Cache, link: &str) -> Option<String> {
+    if let Some(hash) = cache.hashes.lock().unwrap().get(link) {
+        return Some(hash.clone());
+    }
+    let hash = tokio::time::timeout(HASH_TIMEOUT, fetch_hash(http, link)).await.ok().flatten()?;
+    let mut hashes = cache.hashes.lock().unwrap();
+    if hashes.len() >= MAX_CACHED_HASHES {
+        hashes.clear();
+    }
+    hashes.insert(link.to_owned(), hash.clone());
+    Some(hash)
+}
+
+const HASH_CHUNK: u64 = 64 * 1024;
+const HASH_TIMEOUT: Duration = Duration::from_secs(6);
+
+async fn fetch_hash(http: &reqwest::Client, link: &str) -> Option<String> {
+    let range = |from: u64, to: u64| http.get(link).header(reqwest::header::RANGE, format!("bytes={from}-{to}")).send();
+    let first = range(0, HASH_CHUNK - 1).await.ok()?;
+    // A server that ignores the range would send the whole video.
+    if first.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+        return None;
+    }
+    let size: u64 = first.headers().get(reqwest::header::CONTENT_RANGE)?.to_str().ok()?.rsplit('/').next()?.parse().ok()?;
+    if size < HASH_CHUNK {
+        return None;
+    }
+    let head = first.bytes().await.ok()?;
+    let last = range(size - HASH_CHUNK, size - 1).await.ok()?;
+    if last.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+        return None;
+    }
+    let tail = last.bytes().await.ok()?;
+    (head.len() as u64 == HASH_CHUNK && tail.len() as u64 == HASH_CHUNK).then(|| hash_of(size, &head, &tail))
+}
+
+fn hash_of(size: u64, head: &[u8], tail: &[u8]) -> String {
+    let sum = head
+        .chunks_exact(8)
+        .chain(tail.chunks_exact(8))
+        .fold(size, |sum, word| sum.wrapping_add(u64::from_le_bytes(word.try_into().unwrap())));
+    format!("{sum:016x}")
 }
 
 /// The subtitle as Stremio lists it. Its address points back at this server, which only
@@ -430,7 +553,7 @@ mod tests {
             provider,
             file: file.into(),
             lang: lang(code),
-            release: release.into(),
+            releases: vec![release.into()],
             hearing_impaired: false,
             machine_translated: false,
             downloads,
@@ -476,6 +599,34 @@ mod tests {
         let found = vec![sub(Provider::OpenSubtitles, "1", "en", "Movie.2020.1080p.WEB-DL.x264-NTb", 100), exact];
         let ranked = rank(found, &Subtitles::default(), &[lang("en")], Some("Movie.2020.1080p.WEB-DL.x264-NTb.mkv"));
         assert_eq!(ranked[0].file, "2");
+    }
+
+    #[test]
+    fn the_same_release_beats_a_popular_one_and_other_cuts_count_against() {
+        let video = Torrent::from_name("Movie.2020.1080p.WEB-DL.DDP5.1.H.264-NTb.mkv");
+        let score = |r: &str| release_score(&[r.to_owned()], &video);
+        assert_eq!(score("movie 2020 1080p web-dl ddp5 1 h 264-ntb"), 100);
+        assert!(score("Movie.2020.1080p.WEB-DL.x264-NTb") > score("Movie.2020.1080p.WEBRip.x264-NTb"));
+        assert!(score("Movie.2020.1080p.WEBRip.x264-NTb") > score("Movie.2020.Extended.1080p.WEB-DL.x264-NTb"));
+        assert!(score("Movie.2020.Extended.1080p.WEB-DL.x264-NTb") < 0);
+        // A subtitle that fits several releases scores by the best of them.
+        assert_eq!(release_score(&["Movie.2020.BluRay".into(), "Movie.2020.1080p.WEB-DL.DDP5.1.H.264-NTb".into()], &video), 100);
+
+        let mut found = vec![sub(Provider::Subdl, "1-1", "en", "Movie.2020.1080p.WEB-DL.x264-NTb", 9000)];
+        found.push(sub(Provider::Subdl, "2-2", "en", "Movie.2020.1080p.WEB-DL.DDP5.1.H.264-NTb", 1));
+        let ranked = rank(found, &Subtitles::default(), &[lang("en")], Some("Movie.2020.1080p.WEB-DL.DDP5.1.H.264-NTb.mkv"));
+        assert_eq!(ranked[0].file, "2-2");
+    }
+
+    #[test]
+    fn hashes_like_opensubtitles() {
+        let mut head = vec![0u8; HASH_CHUNK as usize];
+        let tail = vec![0xffu8; HASH_CHUNK as usize];
+        assert_eq!(hash_of(1 << 20, &head, &head), "0000000000100000");
+        head[0] = 1;
+        head[8] = 2;
+        // Each all-ones word adds 2^64 - 1, so the tail takes 8192 off.
+        assert_eq!(hash_of(1 << 20, &head, &tail), format!("{:016x}", (1u64 << 20) + 3 - 8192));
     }
 
     #[test]
