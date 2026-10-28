@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Matzio</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Matzio</h1>
+        <p class="status" id="status">Checking addon…</p>
+      </header>
+
+      <section id="install" hidden>
+        <h2>Add to Stremio</h2>
+        <p>Matzio runs on this PC. Install it in Stremio once, and it keeps working while Matzio is in your tray.</p>
+        <div class="url-row">
+          <input id="manifest-url" readonly aria-label="Addon link" />
+          <button id="copy" type="button">Copy</button>
+        </div>
+        <button id="install-button" class="primary" type="button">Install in Stremio</button>
+      </section>
+
+      <section id="error" hidden>
+        <h2>The addon could not start</h2>
+        <p id="error-text"></p>
+        <p>Close whatever is using that port, then quit Matzio from the tray and start it again.</p>
+      </section>
+
+      <section>
+        <h2>Coming next</h2>
+        <p class="muted">Debrid keys, drag-to-rank sorting, how streams look in Stremio, and the internet speed check will live here.</p>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
