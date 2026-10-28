@@ -20,7 +20,7 @@ use tauri::{
 use tauri::window::{Effect, EffectsBuilder};
 use tauri_plugin_opener::OpenerExt;
 
-use settings::{Settings, SettingsStore};
+use settings::{Preferences, Settings, SettingsStore};
 use updates::{UpdateStatus, Updates};
 
 const SETTINGS_LABEL: &str = "settings";
@@ -74,6 +74,16 @@ fn get_settings(store: State<SettingsStore>) -> Settings {
 #[tauri::command]
 fn set_auto_update(store: State<SettingsStore>, enabled: bool) -> Result<Settings, String> {
     store.update(|s| s.auto_update = enabled)
+}
+
+#[tauri::command]
+fn set_setup_complete(store: State<SettingsStore>, complete: bool) -> Result<Settings, String> {
+    store.update(|s| s.setup_complete = complete)
+}
+
+#[tauri::command]
+fn save_preferences(store: State<SettingsStore>, preferences: Preferences) -> Result<Settings, String> {
+    store.update(|s| s.preferences = preferences)
 }
 
 #[tauri::command]
@@ -180,8 +190,8 @@ fn open_settings(app: &AppHandle) {
     }
     let builder = WebviewWindowBuilder::new(app, SETTINGS_LABEL, WebviewUrl::App("index.html".into()))
         .title("Matzio")
-        .inner_size(540.0, 620.0)
-        .min_inner_size(440.0, 480.0)
+        .inner_size(940.0, 640.0)
+        .min_inner_size(760.0, 540.0)
         .theme(Some(Theme::Dark))
         .center();
     // Real frosted glass behind the page: Mica on Windows 11, Acrylic on Windows 10.
@@ -196,7 +206,7 @@ fn open_settings(app: &AppHandle) {
 }
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
-    let open = MenuItem::with_id(app, "open", "Open settings", true, None::<&str>)?;
+    let open = MenuItem::with_id(app, "open", "Open Matzio", true, None::<&str>)?;
     let install = MenuItem::with_id(app, "install", "Install in Stremio", true, None::<&str>)?;
     let update = MenuItem::with_id(app, "update", "Check for updates", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Matzio", true, None::<&str>)?;
@@ -245,6 +255,8 @@ pub fn run() {
             app_info,
             get_settings,
             set_auto_update,
+            set_setup_complete,
+            save_preferences,
             update_status,
             check_for_updates,
             install_update,
@@ -258,14 +270,16 @@ pub fn run() {
             let (addon, status) = start_addon(config.clone());
             let failed = matches!(status, AddonStatus::Failed { .. });
             app.manage(status);
+            let first_run = !store.get().setup_complete;
             app.manage(store);
             app.manage(config);
             app.manage(addon);
             app.manage(Updates::default());
             updates::start_background_checks(app.handle().clone());
             build_tray(app.handle())?;
-            if failed {
-                // Surface the problem right away instead of failing silently in the tray.
+            if failed || first_run {
+                // Greet a new install with setup, and surface a startup failure instead of
+                // failing silently in the tray.
                 open_settings(app.handle());
             }
             Ok(())
