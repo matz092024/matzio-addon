@@ -27,7 +27,7 @@ const SETTINGS_LABEL: &str = "settings";
 
 /// Whether the addon server came up, as shown in the settings window.
 #[derive(Clone, Serialize)]
-#[serde(tag = "state", rename_all = "camelCase")]
+#[serde(tag = "state", rename_all = "camelCase", rename_all_fields = "camelCase")]
 enum AddonStatus {
     Running { manifest_url: String },
     Failed { error: String },
@@ -299,4 +299,18 @@ pub fn run() {
                 api.prevent_exit();
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn addon_status_fields_are_camel_case() {
+        let running = AddonStatus::Running { manifest_url: "http://127.0.0.1:7777/manifest.json".into() };
+        assert_eq!(
+            serde_json::to_value(running).unwrap(),
+            serde_json::json!({ "state": "running", "manifestUrl": "http://127.0.0.1:7777/manifest.json" })
+        );
+    }
 }
