@@ -110,6 +110,7 @@ through the API, which is why releases are driven by the version bump.
 
 ## Current status (2026-10-28)
 
+- **0.6.1**: subtitles in every picked language (one search each) and in-sync ones first (video hash worked out from the debrid link, better release matching) (PR #18).
 - **0.6.0**: custom stream labels from the user's own templates (PR #16).
 - **0.5.0**: subtitles from OpenSubtitles and SubDL with the user's own keys (PR #14).
 - **0.4.0**: switchable filters, more sources with switches, settings
