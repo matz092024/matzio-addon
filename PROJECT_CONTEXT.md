@@ -37,7 +37,8 @@ crates/addon/            Stremio addon server (Rust library, axum)
   src/lib.rs             routes: /manifest.json, /stream/..., /play/{service}/{hash}
   src/config.rs          debrid keys + preferences (shared, live-updated) + service base URLs
   src/streams.rs         ranks and formats Stremio stream entries
-  src/torrent.rs         parses torrent titles (resolution, quality, language, size...)
+  src/torrent.rs         parses torrent titles (resolution, quality, languages, HDR, codec, audio...)
+  src/filters.rs         the user's checks (hide / show at bottom), preference ranking, result limits
   src/sources/torrentio.rs   torrent search source
   src/sources/cinemeta.rs    runtime lookup for speed-based size filtering
   src/debrid/{realdebrid,torbox}.rs   add torrent, pick file, get direct link
@@ -114,6 +115,15 @@ through the API, which is why releases are driven by the version bump.
   `filterBySpeed`, `excludeResolutions`, `displayStyle`) are wired into the
   addon `Config` and applied live to stream results (including Cinemeta runtime
   lookup for speed-based size filtering).
+
+## Filters (since 0.4)
+
+Preferences hold a `filters` object with one entry per check: speed, size
+(min/max GB, per-resolution max), quality, language, hdr, codec, audio,
+keywords and limits. Each has `enabled` and (except limits) `action`
+(`hide` or `demote`). Tag checks have `avoid` and `prefer` lists; prefer lists
+rank streams through the matching sort key. Settings from 0.3 and older
+(`filterBySpeed`, `excludeResolutions`) are migrated on load in `config.rs`.
 
 ## Known caveats
 

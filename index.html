@@ -100,23 +100,8 @@
 
         <section class="page" data-page="filters">
           <h1>Filters</h1>
-          <p class="subtle">Streams that never show up in Stremio's list.</p>
-          <div class="glass">
-            <div class="row">
-              <div>
-                <div class="label">Hide streams too big for my connection</div>
-                <div class="subtle small" id="speed-filter-hint"></div>
-              </div>
-              <label class="switch">
-                <input type="checkbox" id="filter-by-speed" />
-                <span class="track"><span class="thumb"></span></span>
-              </label>
-            </div>
-          </div>
-          <div class="glass">
-            <h2>Hide these qualities</h2>
-            <div class="chips" id="exclude-chips"></div>
-          </div>
+          <p class="subtle">Every check can be switched off on its own, and can either hide streams or just move them to the bottom. Preferences (★) rank streams through their place under Sorting.</p>
+          <div class="check-list" id="filter-cards"></div>
         </section>
 
         <section class="page" data-page="display">

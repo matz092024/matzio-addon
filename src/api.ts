@@ -9,12 +9,26 @@ export type UpdateStatus =
   | { state: "available" | "installing"; version: string }
   | { state: "failed"; error: string };
 
+export type Action = "hide" | "demote";
+export type Check = { enabled: boolean; action: Action };
+export type TagCheck = Check & { avoid: string[]; prefer: string[] };
+export type Filters = {
+  speed: Check;
+  size: Check & { minGb: number | null; maxGb: number | null; maxGbByResolution: Record<string, number> };
+  quality: TagCheck;
+  language: Check & { preferred: string[]; onlyPreferred: boolean };
+  hdr: TagCheck;
+  codec: TagCheck;
+  audio: TagCheck;
+  keywords: TagCheck;
+  limits: { enabled: boolean; total: number; perResolution: number };
+};
+
 export type Preferences = {
   sortOrder: string[];
   speedMbps: number | null;
-  filterBySpeed: boolean;
-  excludeResolutions: string[];
   displayStyle: string;
+  filters: Filters;
 };
 
 export type Settings = Preferences & { autoUpdate: boolean; startWithWindows: boolean; setupComplete: boolean };

@@ -264,25 +264,50 @@ async fn applies_preferences_for_sorting_filters_speed_and_display() {
     assert_eq!(streams[1]["title"], "15.20 GB · RD");
 
     // Exclude 4K (2160p).
-    state.config.write().unwrap().preferences = Preferences {
-        exclude_resolutions: vec!["2160p".into()],
-        ..Preferences::default()
-    };
+    let mut prefs = Preferences::default();
+    prefs.filters.quality.avoid = vec!["2160p".into()];
+    state.config.write().unwrap().preferences = prefs.clone();
     let (_, body) = get_json(&app, "/stream/movie/tt0111161.json").await;
     let streams = body.unwrap()["streams"].as_array().unwrap().clone();
     assert_eq!(streams.len(), 1);
     assert_eq!(streams[0]["name"], "Matzio RD\n720p");
 
+    // The same check set to "show at the bottom" keeps 4K, below 720p.
+    prefs.filters.quality.action = config::Action::Demote;
+    state.config.write().unwrap().preferences = prefs.clone();
+    let (_, body) = get_json(&app, "/stream/movie/tt0111161.json").await;
+    let names: Vec<_> = body.unwrap()["streams"].as_array().unwrap().iter().map(|s| s["name"].clone()).collect();
+    assert_eq!(names, ["Matzio RD\n720p", "Matzio RD\n4K"]);
+
+    // Switched off, it does nothing.
+    prefs.filters.quality.enabled = false;
+    state.config.write().unwrap().preferences = prefs;
+    let (_, body) = get_json(&app, "/stream/movie/tt0111161.json").await;
+    let names: Vec<_> = body.unwrap()["streams"].as_array().unwrap().iter().map(|s| s["name"].clone()).collect();
+    assert_eq!(names, ["Matzio RD\n4K", "Matzio RD\n720p"]);
+
     // Speed filter with 10 Mbps on a 120-min movie (~9 GB cap) hides the 15.2 GB 4K stream.
-    state.config.write().unwrap().preferences = Preferences {
-        speed_mbps: Some(10.0),
-        filter_by_speed: true,
-        ..Preferences::default()
-    };
+    state.config.write().unwrap().preferences = Preferences { speed_mbps: Some(10.0), ..Preferences::default() };
     let (_, body) = get_json(&app, "/stream/movie/tt0111161.json").await;
     let streams = body.unwrap()["streams"].as_array().unwrap().clone();
     assert_eq!(streams.len(), 1);
     assert_eq!(streams[0]["name"], "Matzio RD\n720p");
+
+    // A plain size cap does the same without a speed.
+    let mut prefs = Preferences::default();
+    prefs.filters.size.max_gb = Some(10.0);
+    state.config.write().unwrap().preferences = prefs;
+    let (_, body) = get_json(&app, "/stream/movie/tt0111161.json").await;
+    let streams = body.unwrap()["streams"].as_array().unwrap().clone();
+    assert_eq!(streams.len(), 1);
+    assert_eq!(streams[0]["name"], "Matzio RD\n720p");
+
+    // Result limits.
+    let mut prefs = Preferences::default();
+    prefs.filters.limits = config::Limits { enabled: true, total: 1, per_resolution: 5 };
+    state.config.write().unwrap().preferences = prefs;
+    let (_, body) = get_json(&app, "/stream/movie/tt0111161.json").await;
+    assert_eq!(body.unwrap()["streams"].as_array().unwrap().len(), 1);
 }
 
 #[tokio::test]

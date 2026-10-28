@@ -66,7 +66,10 @@ fn parse(stream: Stream) -> Option<Torrent> {
         let file = lines.next()?.trim();
         (!file.is_empty() && file != stats).then(|| file.to_owned())
     });
-    Some(Torrent { info_hash, name, filename, size_bytes, seeders, origin })
+    // Lines after the stats, such as "Multi Audio / 🇬🇧 / 🇮🇹".
+    let notes = stream.title.lines().skip_while(|l| *l != stats).skip(1).collect::<Vec<_>>().join("\n");
+    let notes = (!stats.is_empty() && !notes.trim().is_empty()).then_some(notes);
+    Some(Torrent { info_hash, name, filename, size_bytes, seeders, origin, notes })
 }
 
 #[cfg(test)]
@@ -76,7 +79,7 @@ mod tests {
     #[test]
     fn parses_torrentio_streams() {
         let json = r#"{"streams":[
-            {"name":"Torrentio\n1080p","title":"The.Movie.2019.1080p.BluRay.x264\n👤 152 💾 2.1 GB ⚙️ YTS",
+            {"name":"Torrentio\n1080p","title":"The.Movie.2019.1080p.BluRay.x264\n👤 152 💾 2.1 GB ⚙️ YTS\nMulti Audio / 🇬🇧 / 🇮🇹",
              "infoHash":"ABCDEF0123456789ABCDEF0123456789ABCDEF01","fileIdx":0,
              "behaviorHints":{"bingeGroup":"x","filename":"The.Movie.2019.1080p.BluRay.x264.mp4"}},
             {"name":"Torrentio\n720p","title":"Show.S01.720p.WEB\nShow.S01E02.720p.WEB.mkv\n👤 9 💾 700 MB ⚙️ EZTV",
@@ -94,11 +97,14 @@ mod tests {
         assert_eq!(movie.size_bytes, Some((2.1 * (1u64 << 30) as f64) as u64));
         assert_eq!(movie.origin.as_deref(), Some("YTS"));
         assert_eq!(movie.resolution(), 1080);
+        assert_eq!(movie.notes.as_deref(), Some("Multi Audio / 🇬🇧 / 🇮🇹"));
+        assert_eq!(movie.languages(), ["en", "it", "multi"]);
 
         let episode = &torrents[1];
         assert_eq!(episode.name, "Show.S01.720p.WEB");
         assert_eq!(episode.size_bytes, Some(700 << 20));
         assert_eq!(episode.origin.as_deref(), Some("EZTV"));
         assert_eq!(episode.filename.as_deref(), Some("Show.S01E02.720p.WEB.mkv"));
+        assert_eq!(episode.notes, None);
     }
 }

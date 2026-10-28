@@ -9,6 +9,7 @@
 
 pub mod config;
 pub mod debrid;
+pub mod filters;
 pub mod sources;
 pub mod streams;
 pub mod torrent;
@@ -140,7 +141,7 @@ async fn stream(State(state): State<AppState>, Path((kind, file)): Path<(String,
     }
 
     let prefs = &config.preferences;
-    let speed_limit = prefs.speed_mbps.filter(|&mbps| prefs.filter_by_speed && mbps > 0.0);
+    let speed_limit = prefs.speed_mbps.filter(|&mbps| prefs.filters.speed.enabled && mbps > 0.0);
 
     let (search_res, runtime) = tokio::join!(
         sources::torrentio::search(&state.http, &state.endpoints.torrentio, &kind, id),
@@ -150,51 +151,52 @@ async fn stream(State(state): State<AppState>, Path((kind, file)): Path<(String,
         }
     );
 
-    let mut torrents = match search_res {
+    let torrents = match search_res {
         Ok(t) => t,
         Err(e) => {
             eprintln!("torrent search failed for {id}: {e}");
             Vec::new()
         }
     };
+    let cx = filters::Context { speed_mbps: speed_limit, runtime };
     let mut seen = HashSet::new();
-    torrents.retain(|t| {
-        seen.insert(t.info_hash.clone())
-            && !t.is_excluded(&prefs.exclude_resolutions)
-            && match (speed_limit, runtime) {
-                (Some(mbps), Some(rt)) => torrent::fits_speed(t.size_bytes, rt, mbps),
-                _ => true,
-            }
-    });
-    streams::rank_by(&mut torrents, &prefs.sort_order);
+    // Each kept torrent with whether it failed a "show at the bottom" check.
+    let mut kept: Vec<(torrent::Torrent, bool)> = torrents
+        .into_iter()
+        .filter(|t| seen.insert(t.info_hash.clone()))
+        .filter_map(|t| {
+            let verdict = filters::judge(&t, &prefs.filters, cx);
+            (!verdict.hidden).then_some((t, verdict.demoted))
+        })
+        .collect();
+    kept.sort_by(|(a, a_down), (b, b_down)| a_down.cmp(b_down).then_with(|| streams::compare(false, a, false, b, prefs)));
 
-    let mut candidates: Vec<(Service, bool, &torrent::Torrent)> = Vec::new();
+    let mut candidates: Vec<(Service, bool, bool, &torrent::Torrent)> = Vec::new();
     if let Some(key) = &config.torbox_key {
-        let hashes: Vec<_> = torrents.iter().map(|t| t.info_hash.clone()).collect();
+        let hashes: Vec<_> = kept.iter().map(|(t, _)| t.info_hash.clone()).collect();
         match debrid::torbox::cached(&state.http, &state.endpoints.torbox, key, &hashes).await {
             Ok(cached) => candidates.extend(
-                torrents
-                    .iter()
-                    .filter(|t| cached.contains(&t.info_hash))
+                kept.iter()
+                    .filter(|(t, _)| cached.contains(&t.info_hash))
                     .take(streams::MAX_PER_SERVICE)
-                    .map(|t| (Service::TorBox, true, t)),
+                    .map(|(t, down)| (Service::TorBox, true, *down, t)),
             ),
             Err(e) => eprintln!("TorBox cache check failed: {e}"),
         }
     }
     if config.real_debrid_key.is_some() {
         candidates.extend(
-            torrents
-                .iter()
+            kept.iter()
                 .take(streams::MAX_PER_SERVICE)
-                .map(|t| (Service::RealDebrid, false, t)),
+                .map(|(t, down)| (Service::RealDebrid, false, *down, t)),
         );
     }
-    candidates.sort_by(|a, b| streams::compare(a.1, a.2, b.1, b.2, &prefs.sort_order));
+    candidates.sort_by(|a, b| a.2.cmp(&b.2).then_with(|| streams::compare(a.1, a.3, b.1, b.3, prefs)));
+    let candidates = filters::limit(candidates, &prefs.filters, |c| c.3.resolution());
 
     let list: Vec<_> = candidates
         .into_iter()
-        .map(|(service, cached, t)| {
+        .map(|(service, cached, _, t)| {
             streams::stream_with_style(&state.base_url, service, cached, t, episode, &prefs.display_style)
         })
         .collect();

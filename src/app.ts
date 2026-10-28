@@ -1,6 +1,7 @@
 // The app after setup: a sidebar of sections.
 import { api, type UpdateStatus } from "./api";
 import { listen } from "@tauri-apps/api/event";
+import { renderFilters } from "./filters";
 import { h, onChange, savePreferences, state } from "./state";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -32,35 +33,7 @@ function showStatus() {
 
 // ---------- Filters ----------
 
-const QUALITIES = [
-  ["2160p", "4K"],
-  ["1080p", "1080p"],
-  ["720p", "720p"],
-  ["480p", "480p and lower"],
-  ["cam", "CAM"],
-  ["scr", "Screener"],
-];
-
-function renderFilters() {
-  const s = state.settings;
-  $<HTMLInputElement>("filter-by-speed").checked = s.filterBySpeed;
-  $("speed-filter-hint").textContent = s.speedMbps
-    ? `Uses your ${Math.round(s.speedMbps)} Mbps connection and each title's runtime.`
-    : "Measure your speed under Connection first.";
-  $("exclude-chips").replaceChildren(
-    ...QUALITIES.map(([value, label]) => {
-      const on = s.excludeResolutions.includes(value);
-      const chip = h("button", { class: `toggle-chip${on ? " on" : ""}`, type: "button", ariaPressed: String(on) }, label);
-      chip.onclick = () =>
-        savePreferences((p) => {
-          p.excludeResolutions = on ? p.excludeResolutions.filter((v) => v !== value) : [...p.excludeResolutions, value];
-        });
-      return chip;
-    }),
-  );
-}
-$<HTMLInputElement>("filter-by-speed").onchange = (e) =>
-  savePreferences((p) => (p.filterBySpeed = (e.target as HTMLInputElement).checked));
+const renderFilterPage = () => renderFilters($("filter-cards"));
 
 // ---------- Stream display ----------
 
@@ -178,10 +151,10 @@ export async function startApp(rerunSetup: () => void) {
   $("rerun-setup").onclick = rerunSetup;
   showStatus();
   onChange(() => {
-    renderFilters();
+    renderFilterPage();
     renderDisplay();
   });
-  renderFilters();
+  renderFilterPage();
   renderDisplay();
   go("home");
   setUpUpdates();
