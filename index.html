@@ -9,29 +9,51 @@
   <body>
     <main>
       <header>
-        <h1>Matzio</h1>
-        <p class="status" id="status">Checking addon…</p>
+        <div>
+          <h1>Matzio</h1>
+          <p class="subtle" id="version"></p>
+        </div>
+        <span class="pill" id="status"><span class="dot"></span><span id="status-text">Checking…</span></span>
       </header>
 
-      <section id="install" hidden>
+      <section class="glass" id="install" hidden>
         <h2>Add to Stremio</h2>
-        <p>Matzio runs on this PC. Install it in Stremio once, and it keeps working while Matzio is in your tray.</p>
-        <div class="url-row">
+        <p class="subtle">Matzio runs on this PC. Install it in Stremio once, and it keeps working while Matzio is in your tray.</p>
+        <div class="field">
           <input id="manifest-url" readonly aria-label="Addon link" />
-          <button id="copy" type="button">Copy</button>
+          <button id="copy" class="ghost" type="button">Copy</button>
         </div>
         <button id="install-button" class="primary" type="button">Install in Stremio</button>
       </section>
 
-      <section id="error" hidden>
+      <section class="glass" id="error" hidden>
         <h2>The addon could not start</h2>
         <p id="error-text"></p>
-        <p>Close whatever is using that port, then quit Matzio from the tray and start it again.</p>
+        <p class="subtle">Close whatever is using that port, then quit Matzio from the tray and start it again.</p>
       </section>
 
-      <section>
+      <section class="glass">
+        <h2>Updates</h2>
+        <div class="row">
+          <div>
+            <div class="label">Install updates automatically</div>
+            <div class="subtle small">Matzio checks every few hours and restarts itself to update.</div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="auto-update" />
+            <span class="track"><span class="thumb"></span></span>
+          </label>
+        </div>
+        <div class="divider"></div>
+        <div class="row">
+          <div class="subtle small" id="update-text">Not checked yet</div>
+          <button id="update-button" class="ghost" type="button">Check now</button>
+        </div>
+      </section>
+
+      <section class="glass">
         <h2>Coming next</h2>
-        <p class="muted">Debrid keys, drag-to-rank sorting, how streams look in Stremio, and the internet speed check will live here.</p>
+        <p class="subtle">Debrid keys, drag-to-rank sorting, how streams look in Stremio, and the internet speed check will live here.</p>
       </section>
     </main>
     <script type="module" src="/src/main.ts"></script>

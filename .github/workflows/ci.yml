@@ -19,7 +19,9 @@ jobs:
       - run: npm ci
       - run: cargo test -p matzio-addon
       - name: Build Windows installer
-        run: npx tauri build
+        # Release signing keys aren't available to PR builds, so skip the update bundle here.
+        run: npx tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
+        shell: bash
       - uses: actions/upload-artifact@v4
         with:
           name: matzio-windows-installer
