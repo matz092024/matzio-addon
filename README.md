@@ -6,8 +6,9 @@ system tray on your own PC and is part of the Matzio family.
 
 ## Status
 
-Step 1 of 4: the tray app runs, the addon can be installed in Stremio, and it
-answers stream requests (with no streams yet). Debrid lookups come in step 2.
+Step 2 of 4: real streams. Matzio finds torrents for the movie or episode,
+lists TorBox results that are already cached (⚡) and Real-Debrid results,
+and plays them through your own debrid account.
 
 ## How it works
 
@@ -18,6 +19,17 @@ answers stream requests (with no streams yet). Debrid lookups come in step 2.
   *Quit Matzio* in the tray menu.
 - **Addon server** (`crates/addon/`): serves the Stremio addon protocol on
   `http://127.0.0.1:7777/manifest.json`, reachable only from this PC.
+  - Torrent results come from Torrentio (`sources/`).
+  - TorBox results are filtered to cached ones with its bulk cache check.
+    Real-Debrid has no cache check any more, so its results are checked when
+    you press play: cached ones start instantly, others are left downloading
+    on your Real-Debrid account and show an error in Stremio.
+  - Picking a stream opens `/play/{service}/{hash}`, which adds the torrent to
+    your debrid account, picks the right file (exact name, then episode
+    number, then largest video) and redirects Stremio to the direct link.
+    Links are reused for 30 minutes.
+  - Debrid keys are saved in `%APPDATA%\com.matzio.addon\settings.json` and
+    only ever sent to the debrid service itself.
 - **Settings window** (`index.html`, `src/`): plain HTML and TypeScript built
   with Vite.
 

@@ -110,5 +110,52 @@ async function showUpdates() {
   });
 }
 
+type DebridKeys = { realDebridKey: string | null; torboxKey: string | null };
+type KeyCheck = { ok: boolean; username: string | null; premium: boolean; expires: string | null; error: string | null };
+
+function describe(check: KeyCheck): string {
+  if (!check.ok) return `✕ ${check.error ?? "Key didn't work"}`;
+  const who = check.username ? ` as ${check.username}` : "";
+  if (!check.premium) return `⚠ Connected${who}, but the account isn't premium`;
+  const until = check.expires ? ` until ${new Date(check.expires).toLocaleDateString()}` : "";
+  return `✓ Connected${who}, premium${until}`;
+}
+
+async function checkKey(service: "realdebrid" | "torbox", key: string, statusId: string) {
+  const status = $(statusId);
+  if (!key) {
+    status.textContent = "";
+    return;
+  }
+  status.textContent = "Checking…";
+  status.textContent = describe(await invoke<KeyCheck>("check_debrid_key", { service, key }));
+}
+
+async function showDebrid() {
+  const rd = $<HTMLInputElement>("rd-key");
+  const tb = $<HTMLInputElement>("tb-key");
+  const keys = await invoke<DebridKeys>("get_debrid_keys");
+  rd.value = keys.realDebridKey ?? "";
+  tb.value = keys.torboxKey ?? "";
+  checkKey("realdebrid", rd.value, "rd-status");
+  checkKey("torbox", tb.value, "tb-status");
+
+  const save = $<HTMLButtonElement>("save-keys");
+  save.addEventListener("click", async () => {
+    save.disabled = true;
+    try {
+      const saved = await invoke<DebridKeys>("set_debrid_keys", { realDebridKey: rd.value, torboxKey: tb.value });
+      rd.value = saved.realDebridKey ?? "";
+      tb.value = saved.torboxKey ?? "";
+      await Promise.all([checkKey("realdebrid", rd.value, "rd-status"), checkKey("torbox", tb.value, "tb-status")]);
+    } catch (e) {
+      alert(`Could not save keys: ${e}`);
+    } finally {
+      save.disabled = false;
+    }
+  });
+}
+
 showAddon();
+showDebrid();
 showUpdates();

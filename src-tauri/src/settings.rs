@@ -11,11 +11,14 @@ use tauri::{AppHandle, Manager};
 pub struct Settings {
     /// Download and install updates without asking.
     pub auto_update: bool,
+    /// Debrid API keys, kept only in this file on the user's PC.
+    pub real_debrid_key: Option<String>,
+    pub torbox_key: Option<String>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { auto_update: true }
+        Self { auto_update: true, real_debrid_key: None, torbox_key: None }
     }
 }
 
@@ -64,7 +67,9 @@ mod tests {
         let s: Settings = serde_json::from_str("{}").unwrap();
         assert_eq!(s, Settings::default());
         assert!(s.auto_update);
-        let s: Settings = serde_json::from_str(r#"{"autoUpdate":false}"#).unwrap();
+        let s: Settings = serde_json::from_str(r#"{"autoUpdate":false,"torboxKey":"tb"}"#).unwrap();
         assert!(!s.auto_update);
+        assert_eq!(s.torbox_key.as_deref(), Some("tb"));
+        assert_eq!(s.real_debrid_key, None);
     }
 }
