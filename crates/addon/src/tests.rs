@@ -183,7 +183,67 @@ async fn mock_upstreams() -> (String, Arc<Mutex<Vec<String>>>) {
             post(|| async { Json(json!({ "download": "https://download.rd.test/movie.mkv" })) }),
         );
 
-    let app = torrentio.merge(cinemeta).merge(others).merge(torbox).merge(rd);
+    let c = calls.clone();
+    let c2 = calls.clone();
+    let subtitles = Router::new()
+        .route(
+            "/os/subtitles",
+            get(|headers: axum::http::HeaderMap, Query(q): Query<std::collections::HashMap<String, String>>| async move {
+                assert_eq!(headers["api-key"], "os-key");
+                assert!(headers[header::USER_AGENT].to_str().unwrap().starts_with("Matzio v"));
+                assert!(q["languages"] == "de,en" || q["languages"] == "en", "{}", q["languages"]);
+                assert_eq!(q["imdb_id"], "111161");
+                Json(json!({ "data": [
+                    { "attributes": { "language": "en", "download_count": 5000, "release": "Movie.2020.720p.BluRay.x264-SPARKS",
+                      "files": [{ "file_id": 11, "file_name": "a.srt" }] } },
+                    { "attributes": { "language": "en", "download_count": 10, "release": "Movie.2020.1080p.WEB-DL.x264-NTb",
+                      "files": [{ "file_id": 12, "file_name": "b.srt" }] } },
+                    { "attributes": { "language": "en", "download_count": 99999, "machine_translated": true, "release": "x",
+                      "files": [{ "file_id": 13, "file_name": "c.srt" }] } }
+                ]}))
+            }),
+        )
+        .route(
+            "/os/login",
+            post(|Json(body): Json<Value>| async move {
+                if body["password"] != "pw" {
+                    return (StatusCode::UNAUTHORIZED, Json(json!({ "message": "Error, invalid username/password" })));
+                }
+                (StatusCode::OK, Json(json!({ "token": "jwt", "base_url": "api.opensubtitles.com", "status": 200 })))
+            }),
+        )
+        .route(
+            "/os/download",
+            post(move |headers: axum::http::HeaderMap, Json(body): Json<Value>| async move {
+                let auth = headers.get(header::AUTHORIZATION).map(|v| v.to_str().unwrap().to_owned()).unwrap_or_default();
+                log(&c, &format!("os:download:{}:{auth}", body["file_id"]));
+                let host = headers[header::HOST].to_str().unwrap();
+                Json(json!({ "link": format!("http://{host}/osfiles/{}.srt", body["file_id"]), "file_name": "b.srt", "remaining": 19 }))
+            }),
+        )
+        .route("/osfiles/{file}", get(|Path(file): Path<String>| async move { format!("1\n00:00:01,000 --> 00:00:02,000\nfile {file}\n") }))
+        .route(
+            "/subdl/subtitles",
+            get(|Query(q): Query<std::collections::HashMap<String, String>>| async move {
+                if q["api_key"] != "subdl-key" {
+                    return Json(json!({ "status": false, "error": "Invalid api key" }));
+                }
+                assert!(q["languages"] == "DE,EN" || q["languages"] == "EN", "{}", q["languages"]);
+                Json(json!({ "status": true, "subtitles": [
+                    { "release_name": "Movie.2020.German.BluRay", "language": "DE", "url": "/subtitle/100-200.zip" },
+                    { "release_name": "Movie.2020.1080p.WEB-DL.x264-NTb", "language": "EN", "url": "/subtitle/300-400.zip", "hi": true }
+                ]}))
+            }),
+        )
+        .route(
+            "/subdlfiles/subtitle/{file}",
+            get(move |Path(file): Path<String>| async move {
+                log(&c2, &format!("subdl:{file}"));
+                subtitles::subdl::zip_of(&[("Movie.de.srt", "hallo")])
+            }),
+        );
+
+    let app = torrentio.merge(cinemeta).merge(others).merge(torbox).merge(rd).merge(subtitles);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await });
@@ -202,6 +262,9 @@ async fn state(rd: Option<&str>, torbox: Option<&str>) -> (AppState, Arc<Mutex<V
         cinemeta: format!("{mock}/cinemeta"),
         torbox: format!("{mock}/torbox"),
         real_debrid: format!("{mock}/rd"),
+        open_subtitles: format!("{mock}/os"),
+        subdl: format!("{mock}/subdl"),
+        subdl_files: format!("{mock}/subdlfiles"),
     };
     let config = Arc::new(RwLock::new(Config::new(rd.map(Into::into), torbox.map(Into::into))));
     (AppState::new(config, endpoints, BASE), calls)
@@ -237,7 +300,7 @@ async fn serves_manifest() {
     assert_eq!(status, StatusCode::OK);
     let body = body.unwrap();
     assert_eq!(body["id"], ADDON_ID);
-    assert_eq!(body["resources"], json!(["stream"]));
+    assert_eq!(body["resources"], json!(["stream", "subtitles"]));
 }
 
 #[tokio::test]
@@ -446,6 +509,79 @@ async fn checks_api_keys() {
     let tb = state.check_key(Service::TorBox, "good").await.unwrap();
     assert_eq!(tb, debrid::Account { username: Some("m@x.test".into()), premium: false, expires: None });
     assert!(state.check_key(Service::TorBox, "bad").await.is_err());
+}
+
+fn subtitle_keys(password: &str) -> config::SubtitleKeys {
+    config::SubtitleKeys {
+        open_subtitles_key: Some("os-key".into()),
+        open_subtitles_username: Some("matz".into()),
+        open_subtitles_password: Some(password.into()),
+        subdl_key: Some("subdl-key".into()),
+    }
+}
+
+#[tokio::test]
+async fn lists_subtitles_in_language_order_and_downloads_them_once() {
+    let (state, calls) = state(None, None).await;
+    let app = router(state.clone());
+    {
+        let mut config = state.config.write().unwrap();
+        config.subtitle_keys = subtitle_keys("pw");
+        config.preferences.subtitles.languages = vec!["de".into(), "en".into()];
+    }
+
+    let uri = "/subtitles/movie/tt0111161/filename=Movie.2020.1080p.WEB-DL.DDP5.1.x264-NTb.mkv&videoSize=1.json";
+    let (status, body) = get_json(&app, uri).await;
+    assert_eq!(status, StatusCode::OK);
+    let subs = body.unwrap()["subtitles"].as_array().unwrap().clone();
+    let urls: Vec<_> = subs.iter().map(|s| s["url"].as_str().unwrap().trim_start_matches(BASE).to_owned()).collect();
+    // German first, then English: the release matching the file, the popular one, and the
+    // hearing impaired one last. Machine translated is hidden by default.
+    assert_eq!(urls, ["/subtitle/subdl/100-200.srt", "/subtitle/opensubtitles/12.srt", "/subtitle/opensubtitles/11.srt", "/subtitle/subdl/300-400.srt"]);
+    let langs: Vec<_> = subs.iter().map(|s| s["lang"].as_str().unwrap()).collect();
+    assert_eq!(langs, ["ger", "eng", "eng", "eng"]);
+
+    let (status, _, body) = get_raw(&app, &urls[1]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(String::from_utf8(body).unwrap().contains("file 12"));
+    // Opening it again uses the kept copy, not another of the day's downloads.
+    get_raw(&app, &urls[1]).await;
+    let (status, headers, body) = get_raw(&app, &urls[0]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers[header::CONTENT_TYPE], "application/x-subrip");
+    assert_eq!(body, b"hallo");
+    assert_eq!(*calls.lock().unwrap(), ["os:download:12:Bearer jwt", "subdl:100-200.zip"]);
+
+    // Switched off: nothing is searched.
+    state.config.write().unwrap().preferences.subtitles.enabled = false;
+    let (_, body) = get_json(&app, "/subtitles/movie/tt0111161.json").await;
+    assert_eq!(body.unwrap()["subtitles"], json!([]));
+}
+
+#[tokio::test]
+async fn subtitles_need_a_key_and_reject_bad_input() {
+    let (app, _) = app(None, None).await;
+    let (_, body) = get_json(&app, "/subtitles/movie/tt0111161.json").await;
+    assert_eq!(body.unwrap()["subtitles"], json!([]));
+    assert_eq!(get_raw(&app, "/subtitle/opensubtitles/..%2Fx.srt").await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(get_raw(&app, "/subtitle/other/1.srt").await.0, StatusCode::NOT_FOUND);
+    assert_eq!(get_json(&app, "/subtitles/series/tt0111161.json").await.0, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn checks_subtitle_keys() {
+    let (state, _) = state(None, None).await;
+    let os = subtitles::Provider::OpenSubtitles;
+    assert_eq!(state.check_subtitle_key(os, subtitle_keys("pw")).await.unwrap(), "Signed in as matz");
+    let wrong = state.check_subtitle_key(os, subtitle_keys("nope")).await.unwrap_err();
+    assert!(wrong.to_string().contains("username or password"), "{wrong}");
+    let key_only = config::SubtitleKeys { open_subtitles_key: Some("os-key".into()), ..Default::default() };
+    assert!(state.check_subtitle_key(os, key_only).await.unwrap().starts_with("Key works"));
+
+    let subdl = subtitles::Provider::Subdl;
+    assert_eq!(state.check_subtitle_key(subdl, subtitle_keys("pw")).await.unwrap(), "Key works");
+    let bad = config::SubtitleKeys { subdl_key: Some("bad".into()), ..Default::default() };
+    assert_eq!(state.check_subtitle_key(subdl, bad).await.unwrap_err().to_string(), "SubDL didn't accept the API key");
 }
 
 #[tokio::test]

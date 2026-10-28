@@ -12,7 +12,34 @@ use serde::{Deserialize, Serialize};
 pub struct Config {
     pub real_debrid_key: Option<String>,
     pub torbox_key: Option<String>,
+    pub subtitle_keys: SubtitleKeys,
     pub preferences: Preferences,
+}
+
+/// Subtitle provider credentials. Like the debrid keys, they stay on this PC and only go
+/// to the provider itself.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SubtitleKeys {
+    pub open_subtitles_key: Option<String>,
+    /// Optional OpenSubtitles account: signed in, the daily download limit is higher.
+    pub open_subtitles_username: Option<String>,
+    pub open_subtitles_password: Option<String>,
+    pub subdl_key: Option<String>,
+}
+
+impl SubtitleKeys {
+    /// Treats empty or whitespace-only values as not set.
+    pub fn cleaned(self) -> Self {
+        let clean = |k: Option<String>| k.map(|k| k.trim().to_owned()).filter(|k| !k.is_empty());
+        Self {
+            open_subtitles_key: clean(self.open_subtitles_key),
+            open_subtitles_username: clean(self.open_subtitles_username),
+            // Passwords may have spaces at the ends; only an empty one counts as not set.
+            open_subtitles_password: self.open_subtitles_password.filter(|p| !p.is_empty()),
+            subdl_key: clean(self.subdl_key),
+        }
+    }
 }
 
 impl Config {
@@ -22,8 +49,14 @@ impl Config {
         Self {
             real_debrid_key: clean(real_debrid_key),
             torbox_key: clean(torbox_key),
+            subtitle_keys: SubtitleKeys::default(),
             preferences: Preferences::default(),
         }
+    }
+
+    pub fn with_subtitle_keys(mut self, keys: SubtitleKeys) -> Self {
+        self.subtitle_keys = keys.cleaned();
+        self
     }
 
     pub fn with_preferences(mut self, preferences: Preferences) -> Self {
@@ -44,6 +77,49 @@ pub struct Preferences {
     pub display_style: String,
     pub filters: Filters,
     pub sources: Sources,
+    pub subtitles: Subtitles,
+}
+
+/// Subtitles offered alongside the streams, from the providers the user has a key for.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Subtitles {
+    pub enabled: bool,
+    pub open_subtitles: bool,
+    pub subdl: bool,
+    /// Language codes such as "en", "de" or "pt-br", most wanted first.
+    pub languages: Vec<String>,
+    /// Most subtitles listed per language, best matching first.
+    pub per_language: usize,
+    /// Subtitles for the deaf and hard of hearing, with sound descriptions.
+    pub hearing_impaired: Placement,
+    /// Machine or AI translated subtitles.
+    pub machine_translated: Placement,
+}
+
+impl Default for Subtitles {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            open_subtitles: true,
+            subdl: true,
+            languages: vec!["en".into()],
+            per_language: 5,
+            hearing_impaired: Placement::Demote,
+            machine_translated: Placement::Hide,
+        }
+    }
+}
+
+/// Where a kind of subtitle goes in the list.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum Placement {
+    #[default]
+    Show,
+    /// Listed after the others in the same language.
+    Demote,
+    Hide,
 }
 
 /// Where torrents are searched. Several can be on; results are merged and duplicates removed.
@@ -89,6 +165,7 @@ impl Default for Preferences {
             display_style: "detailed".into(),
             filters: Filters::default(),
             sources: Sources::default(),
+            subtitles: Subtitles::default(),
         }
     }
 }
@@ -230,6 +307,7 @@ struct SavedPreferences {
     display_style: Option<String>,
     filters: Option<Filters>,
     sources: Sources,
+    subtitles: Subtitles,
     filter_by_speed: Option<bool>,
     exclude_resolutions: Option<Vec<String>>,
 }
@@ -261,6 +339,7 @@ impl From<SavedPreferences> for Preferences {
             display_style: saved.display_style.unwrap_or(defaults.display_style),
             filters,
             sources: saved.sources,
+            subtitles: saved.subtitles,
         }
     }
 }
@@ -279,6 +358,10 @@ pub struct Endpoints {
     pub cinemeta: String,
     pub torbox: String,
     pub real_debrid: String,
+    pub open_subtitles: String,
+    pub subdl: String,
+    /// Where SubDL's subtitle archives are downloaded from.
+    pub subdl_files: String,
 }
 
 impl Default for Endpoints {
@@ -293,6 +376,9 @@ impl Default for Endpoints {
             cinemeta: "https://v3-cinemeta.strem.io".into(),
             torbox: "https://api.torbox.app/v1/api".into(),
             real_debrid: "https://api.real-debrid.com/rest/1.0".into(),
+            open_subtitles: "https://api.opensubtitles.com/api/v1".into(),
+            subdl: "https://api.subdl.com/api/v1".into(),
+            subdl_files: "https://dl.subdl.com".into(),
         }
     }
 }

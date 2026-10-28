@@ -1,12 +1,13 @@
 // Settings shared by the wizard and the app. Widgets appear in both, so every
 // change re-renders whatever is listening rather than patching the DOM in place.
-import { api, type AddonStatus, type DebridKeys, type Preferences, type Settings } from "./api";
+import { api, type AddonStatus, type DebridKeys, type Preferences, type Settings, type SubtitleKeys } from "./api";
 
 export const state = {
   settings: null as unknown as Settings,
   addon: null as unknown as AddonStatus,
   // null until loaded; stays null when this build has no debrid support yet.
   keys: null as DebridKeys | null,
+  subtitleKeys: null as SubtitleKeys | null,
 };
 
 const listeners = new Set<() => void>();
@@ -15,13 +16,16 @@ export const emit = () => listeners.forEach((fn) => fn());
 
 export async function load() {
   [state.settings, state.addon] = await Promise.all([api.getSettings(), api.addonStatus()]);
-  state.keys = await api.getDebridKeys().catch(() => null);
+  [state.keys, state.subtitleKeys] = await Promise.all([
+    api.getDebridKeys().catch(() => null),
+    api.getSubtitleKeys().catch(() => null),
+  ]);
 }
 
 function preferences(s: Settings): Preferences {
-  const { sortOrder, speedMbps, displayStyle, filters, sources } = s;
+  const { sortOrder, speedMbps, displayStyle, filters, sources, subtitles } = s;
   // A deep copy, so a change only shows once it's saved.
-  return structuredClone({ sortOrder, speedMbps, displayStyle, filters, sources });
+  return structuredClone({ sortOrder, speedMbps, displayStyle, filters, sources, subtitles });
 }
 
 export async function savePreferences(change: (p: Preferences) => void) {

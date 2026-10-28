@@ -1,5 +1,5 @@
 // Export and import of Matzio's stream settings as a file to keep or share.
-// Debrid keys and custom source addresses are never part of it, and importing keeps
+// Debrid and subtitle keys and custom source addresses are never part of it, and importing keeps
 // this PC's keys, addresses and speed.
 import { api, type Preferences } from "./api";
 import { emit, state, toast } from "./state";
@@ -7,10 +7,10 @@ import { emit, state, toast } from "./state";
 const FORMAT = "matzio-settings";
 
 export function exportSettings() {
-  const { sortOrder, displayStyle, filters } = state.settings;
+  const { sortOrder, displayStyle, filters, subtitles } = state.settings;
   // Custom source addresses can be configured addon links with someone's debrid key inside.
   const { urls: _private, ...sources } = state.settings.sources;
-  const file = { format: FORMAT, version: 1, preferences: { sortOrder, displayStyle, filters, sources } };
+  const file = { format: FORMAT, version: 1, preferences: { sortOrder, displayStyle, filters, sources, subtitles } };
   const blob = new Blob([JSON.stringify(file, null, 2)], { type: "application/json" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
@@ -30,10 +30,10 @@ export function importSettings() {
     try {
       const parsed = JSON.parse(await file.text());
       if (parsed?.format !== FORMAT || typeof parsed.preferences !== "object") throw new Error("not a Matzio settings file");
-      const { sortOrder, displayStyle, filters, sources } = parsed.preferences as Partial<Preferences>;
+      const { sortOrder, displayStyle, filters, sources, subtitles } = parsed.preferences as Partial<Preferences>;
       // Only the shareable parts; anything missing falls back to defaults in the app.
       const urls = state.settings.sources.urls;
-      const next = { sortOrder, displayStyle, filters, sources: { ...sources, urls }, speedMbps: state.settings.speedMbps } as Preferences;
+      const next = { sortOrder, displayStyle, filters, sources: { ...sources, urls }, subtitles, speedMbps: state.settings.speedMbps } as Preferences;
       state.settings = await api.savePreferences(next);
       toast("Settings imported");
       emit();

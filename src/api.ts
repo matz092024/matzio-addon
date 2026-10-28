@@ -34,12 +34,24 @@ export type Sources = {
   urls: Record<string, string>;
 };
 
+export type Placement = "show" | "demote" | "hide";
+export type Subtitles = {
+  enabled: boolean;
+  openSubtitles: boolean;
+  subdl: boolean;
+  languages: string[];
+  perLanguage: number;
+  hearingImpaired: Placement;
+  machineTranslated: Placement;
+};
+
 export type Preferences = {
   sortOrder: string[];
   speedMbps: number | null;
   displayStyle: string;
   filters: Filters;
   sources: Sources;
+  subtitles: Subtitles;
 };
 
 export type Settings = Preferences & { autoUpdate: boolean; startWithWindows: boolean; setupComplete: boolean };
@@ -53,6 +65,15 @@ export type KeyCheck = {
   expires: string | null;
   error: string | null;
 };
+
+export type SubtitleProvider = "opensubtitles" | "subdl";
+export type SubtitleKeys = {
+  openSubtitlesKey: string | null;
+  openSubtitlesUsername: string | null;
+  openSubtitlesPassword: string | null;
+  subdlKey: string | null;
+};
+export type SubtitleCheck = { ok: boolean; message: string };
 
 export const api = {
   addonStatus: () => invoke<AddonStatus>("addon_status"),
@@ -69,4 +90,7 @@ export const api = {
   getDebridKeys: () => invoke<DebridKeys>("get_debrid_keys"),
   setDebridKeys: (keys: DebridKeys) => invoke<DebridKeys>("set_debrid_keys", keys),
   checkDebridKey: (service: DebridService, key: string) => invoke<KeyCheck>("check_debrid_key", { service, key }),
+  getSubtitleKeys: () => invoke<SubtitleKeys>("get_subtitle_keys"),
+  setSubtitleKeys: (keys: SubtitleKeys) => invoke<SubtitleKeys>("set_subtitle_keys", { keys }),
+  checkSubtitleKey: (provider: SubtitleProvider, keys: SubtitleKeys) => invoke<SubtitleCheck>("check_subtitle_key", { provider, keys }),
 };
