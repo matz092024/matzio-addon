@@ -129,7 +129,7 @@ fn parse(a: Attributes) -> Option<Subtitle> {
         provider: super::Provider::OpenSubtitles,
         file: file_id,
         lang: lang(a.language.as_deref()?)?,
-        release: a.release.or(file.file_name).unwrap_or_default(),
+        releases: a.release.into_iter().chain(file.file_name).filter(|r| !r.trim().is_empty()).collect(),
         hearing_impaired: a.hearing_impaired,
         machine_translated: a.ai_translated || a.machine_translated,
         downloads: a.download_count.as_ref().and_then(crate::sources::number).unwrap_or(0),
@@ -255,6 +255,6 @@ mod tests {
         let subs: Vec<_> = body.data.into_iter().filter_map(|i| parse(i.attributes)).collect();
         assert_eq!(subs.len(), 2);
         assert_eq!((subs[0].file.as_str(), subs[0].lang.code, subs[0].downloads, subs[0].hearing_impaired), ("99", "en", 1200, true));
-        assert_eq!((subs[1].lang.code, subs[1].release.as_str(), subs[1].machine_translated), ("pt-br", "x.srt", true));
+        assert_eq!((subs[1].lang.code, subs[1].releases[0].as_str(), subs[1].machine_translated), ("pt-br", "x.srt", true));
     }
 }

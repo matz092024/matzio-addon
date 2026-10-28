@@ -31,6 +31,9 @@ struct Item {
     hi: bool,
     #[serde(default)]
     download_count: Option<Value>,
+    /// Every release the subtitle fits, when asked for with `releases=1`.
+    #[serde(default)]
+    releases: Vec<Value>,
 }
 
 fn search_query(key: &str, request: &Request<'_>) -> Vec<(&'static str, String)> {
@@ -41,6 +44,7 @@ fn search_query(key: &str, request: &Request<'_>) -> Vec<(&'static str, String)>
         ("languages", codes.join(",")),
         ("subs_per_page", "30".to_owned()),
         ("hi", "1".to_owned()),
+        ("releases", "1".to_owned()),
     ];
     match request.episode {
         Some(ep) => {
@@ -88,11 +92,14 @@ fn file_id(url: &str) -> Option<String> {
 }
 
 fn parse(item: Item) -> Option<Subtitle> {
+    // Releases come as names, or as objects holding one.
+    let also = item.releases.iter().filter_map(|r| r.as_str().or(r["release_name"].as_str()).or(r["name"].as_str())).map(str::to_owned);
+    let releases: Vec<String> = item.release_name.into_iter().chain(item.name).chain(also).filter(|r| !r.trim().is_empty()).collect();
     Some(Subtitle {
         provider: super::Provider::Subdl,
         file: file_id(item.url.as_deref()?)?,
         lang: lang(item.language.as_deref()?)?,
-        release: item.release_name.or(item.name).unwrap_or_default(),
+        releases,
         hearing_impaired: item.hi,
         machine_translated: false,
         downloads: item.download_count.as_ref().and_then(crate::sources::number).unwrap_or(0),
@@ -176,7 +183,8 @@ mod tests {
     fn parses_results() {
         let body: SearchResponse = serde_json::from_value(json!({ "status": true, "subtitles": [
             { "release_name": "Movie.2020.1080p.WEB", "language": "EN", "url": "/subtitle/3197651-3213944.zip", "hi": true },
-            { "release_name": "Movie.2020.BluRay", "language": "BR_PT", "url": "/subtitle/1-2.zip" },
+            { "release_name": "Movie.2020.BluRay", "language": "BR_PT", "url": "/subtitle/1-2.zip",
+              "releases": ["Movie.2020.1080p.BluRay.x264-SPARKS", { "release_name": "Movie.2020.720p.BluRay" }] },
             { "release_name": "bad", "language": "EN", "url": "/subtitle/a b.zip" },
             { "release_name": "unknown language", "language": "QQ", "url": "/subtitle/3-4.zip" }
         ]}))
@@ -185,6 +193,7 @@ mod tests {
         assert_eq!(subs.len(), 2);
         assert_eq!((subs[0].file.as_str(), subs[0].lang.code, subs[0].hearing_impaired), ("3197651-3213944", "en", true));
         assert_eq!(subs[1].lang.code, "pt-br");
+        assert_eq!(subs[1].releases, ["Movie.2020.BluRay", "Movie.2020.1080p.BluRay.x264-SPARKS", "Movie.2020.720p.BluRay"]);
     }
 
     #[test]

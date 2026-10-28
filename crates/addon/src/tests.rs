@@ -191,8 +191,21 @@ async fn mock_upstreams() -> (String, Arc<Mutex<Vec<String>>>) {
             get(|headers: axum::http::HeaderMap, Query(q): Query<std::collections::HashMap<String, String>>| async move {
                 assert_eq!(headers["api-key"], "os-key");
                 assert!(headers[header::USER_AGENT].to_str().unwrap().starts_with("Matzio v"));
-                assert!(q["languages"] == "de,en" || q["languages"] == "en", "{}", q["languages"]);
+                // One language per search.
+                assert!(q["languages"] == "de" || q["languages"] == "en", "{}", q["languages"]);
                 assert_eq!(q["imdb_id"], "111161");
+                if q["languages"] == "de" {
+                    return Json(json!({ "data": [] }));
+                }
+                if let Some(hash) = q.get("moviehash") {
+                    assert_eq!(hash, VIDEO_HASH);
+                    return Json(json!({ "data": [
+                        { "attributes": { "language": "en", "download_count": 1, "moviehash_match": true, "release": "other",
+                          "files": [{ "file_id": 14, "file_name": "d.srt" }] } },
+                        { "attributes": { "language": "en", "download_count": 5000, "release": "Movie.2020.720p.BluRay.x264-SPARKS",
+                          "files": [{ "file_id": 11, "file_name": "a.srt" }] } }
+                    ]}));
+                }
                 Json(json!({ "data": [
                     { "attributes": { "language": "en", "download_count": 5000, "release": "Movie.2020.720p.BluRay.x264-SPARKS",
                       "files": [{ "file_id": 11, "file_name": "a.srt" }] } },
@@ -228,11 +241,31 @@ async fn mock_upstreams() -> (String, Arc<Mutex<Vec<String>>>) {
                 if q["api_key"] != "subdl-key" {
                     return Json(json!({ "status": false, "error": "Invalid api key" }));
                 }
-                assert!(q["languages"] == "DE,EN" || q["languages"] == "EN", "{}", q["languages"]);
-                Json(json!({ "status": true, "subtitles": [
-                    { "release_name": "Movie.2020.German.BluRay", "language": "DE", "url": "/subtitle/100-200.zip" },
-                    { "release_name": "Movie.2020.1080p.WEB-DL.x264-NTb", "language": "EN", "url": "/subtitle/300-400.zip", "hi": true }
-                ]}))
+                assert_eq!(q["releases"], "1");
+                Json(match q["languages"].as_str() {
+                    "DE" => json!({ "status": true, "subtitles": [
+                        { "release_name": "Movie.2020.German.BluRay", "language": "DE", "url": "/subtitle/100-200.zip" }
+                    ]}),
+                    "EN" => json!({ "status": true, "subtitles": [
+                        { "release_name": "Movie.2020.1080p.WEB-DL.x264-NTb", "language": "EN", "url": "/subtitle/300-400.zip", "hi": true }
+                    ]}),
+                    other => panic!("one language per search, got {other}"),
+                })
+            }),
+        )
+        .route(
+            "/video.mkv",
+            get(|headers: axum::http::HeaderMap| async move {
+                // 192 KB where every 8-byte word is 1, served in ranges like a debrid host.
+                let video: Vec<u8> = (0..VIDEO_SIZE / 8).flat_map(|_| 1u64.to_le_bytes()).collect();
+                let range = headers[header::RANGE].to_str().unwrap().trim_start_matches("bytes=").to_owned();
+                let (from, to) = range.split_once('-').unwrap();
+                let (from, to): (usize, usize) = (from.parse().unwrap(), to.parse().unwrap());
+                (
+                    StatusCode::PARTIAL_CONTENT,
+                    [(header::CONTENT_RANGE, format!("bytes {from}-{to}/{VIDEO_SIZE}"))],
+                    video[from..=to].to_vec(),
+                )
             }),
         )
         .route(
@@ -556,6 +589,32 @@ async fn lists_subtitles_in_language_order_and_downloads_them_once() {
     state.config.write().unwrap().preferences.subtitles.enabled = false;
     let (_, body) = get_json(&app, "/subtitles/movie/tt0111161.json").await;
     assert_eq!(body.unwrap()["subtitles"], json!([]));
+}
+
+const VIDEO_SIZE: usize = 192 * 1024;
+/// The size plus the 16384 words of 1 in the first and last 64 KB.
+const VIDEO_HASH: &str = "0000000000034000";
+
+#[tokio::test]
+async fn hashes_the_playing_video_to_find_its_exact_subtitle() {
+    let (state, calls) = state(None, None).await;
+    let app = router(state.clone());
+    {
+        let mut config = state.config.write().unwrap();
+        config.subtitle_keys = config::SubtitleKeys { open_subtitles_key: Some("os-key".into()), ..Default::default() };
+        config.preferences.subtitles.languages = vec!["en".into()];
+    }
+    // The player opened this file through /play a moment ago.
+    let host = state.endpoints.open_subtitles.trim_end_matches("/os").to_owned();
+    let request = PlayRequest { info_hash: CACHED.into(), filename: Some("Movie.2020.1080p.WEB-DL.DDP5.1.x264-NTb.mkv".into()), episode: None };
+    state.links.lock().unwrap().insert((Service::TorBox, request), (Instant::now(), format!("{host}/video.mkv")));
+
+    let (_, body) = get_json(&app, "/subtitles/movie/tt0111161/filename=Movie.2020.1080p.WEB-DL.DDP5.1.x264-NTb.mkv&videoSize=196608.json").await;
+    let subs = body.unwrap()["subtitles"].as_array().unwrap().clone();
+    let urls: Vec<_> = subs.iter().map(|s| s["url"].as_str().unwrap().trim_start_matches(BASE).to_owned()).collect();
+    // The subtitle OpenSubtitles matched to the exact file comes first, however unpopular.
+    assert_eq!(urls, ["/subtitle/opensubtitles/14.srt", "/subtitle/opensubtitles/11.srt"]);
+    assert!(calls.lock().unwrap().is_empty(), "nothing downloaded yet");
 }
 
 #[tokio::test]

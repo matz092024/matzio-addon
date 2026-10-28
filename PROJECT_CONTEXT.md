@@ -141,8 +141,14 @@ Preferences hold `subtitles`: `enabled`, `openSubtitles`/`subdl` switches, order
 `machineTranslated` placement (`show`, `demote`, `hide`). Keys sit at the top of
 settings.json (`openSubtitlesKey`, optional `openSubtitlesUsername`/`Password`,
 `subdlKey`) and are never exported. Stremio asks `/subtitles/{type}/{id}/{extra}.json`;
-results are ranked by language order, OpenSubtitles hash match, then how well the release
-matches the stream's file name (group, source, resolution), then downloads. Searches are
+each provider is searched once per language (asked together, the popular language filled
+the page and others went missing). Results are ranked by language order, OpenSubtitles
+hash match, then how well the release matches the stream's file name (identical name
+first, then group, source, WEB-DL vs WEBRip, resolution; a different cut like Extended
+counts against; SubDL is asked with `releases=1` so every fitting release counts), then
+downloads. When the player sends no `videoHash`, the addon works it out itself from the
+debrid link last opened through `/play` for that file name (two 64 KB range requests,
+`subtitles::video_hash`), so OpenSubtitles can flag the exact-file match. Searches are
 cached 6 h; a file is only downloaded from the provider when the player opens it, then
 kept 3 h (OpenSubtitles counts downloads: 5/day with a key, 20/day signed in). The
 OpenSubtitles and SubDL request formats were written from their docs without live
