@@ -39,8 +39,9 @@ crates/addon/            Stremio addon server (Rust library, axum)
   src/streams.rs         ranks and formats Stremio stream entries
   src/torrent.rs         parses torrent titles (resolution, quality, languages, HDR, codec, audio...)
   src/filters.rs         the user's checks (hide / show at bottom), preference ranking, result limits
-  src/sources/torrentio.rs   torrent search source
-  src/sources/cinemeta.rs    runtime lookup for speed-based size filtering
+  src/sources/addon.rs       Stremio-addon sources (Torrentio, Comet, MediaFusion)
+  src/sources/{torbox,zilean,knaben}.rs   API sources
+  src/sources/cinemeta.rs    runtime (speed filter) and title (Knaben) lookup
   src/debrid/{realdebrid,torbox}.rs   add torrent, pick file, get direct link
   src/tests.rs           tests against local mock servers
 src-tauri/               Tauri tray app
@@ -130,7 +131,14 @@ rank streams through the matching sort key. Settings from 0.3 and older
 - Real-Debrid removed its instant-availability check, so RD results are only
   checked at play time. Cached ones play instantly; uncached ones are left
   downloading on the RD account and Stremio shows an error.
-- Only one torrent source (Torrentio).
+- Sources (0.4): Torrentio, Comet, MediaFusion, TorBox search (TorBox users)
+  on by default; Zilean and Knaben off. Searched in parallel with a 10 s cap
+  each, merged by info hash. Public instance URLs can be replaced per source
+  (`sources.urls`); those URLs are never included in exported settings. The
+  Comet, MediaFusion, TorBox search, Zilean and Knaben request formats were
+  written from their docs without live access; check them on a real install.
+- Settings export/import (Home): sorting, display, filters and source switches
+  only. Never debrid keys, custom source URLs or the measured speed.
 - The addon listens on `127.0.0.1` only, so phones and TVs cannot reach it yet.
 - Pointer drag-to-rank in the sorting list does not respond in testing (to be
   fixed; `Alt+Up/Down` keyboard reordering is also wired).

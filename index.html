@@ -56,6 +56,7 @@
         <div class="brand"><img class="logo" src="/logo.png" alt="" /><b>Matzio</b></div>
         <button class="nav-item" data-page="home" type="button"><span class="icon">◉</span>Home</button>
         <button class="nav-item" data-page="debrid" type="button"><span class="icon">⚿</span>Debrid</button>
+        <button class="nav-item" data-page="sources" type="button"><span class="icon">⌕</span>Sources</button>
         <button class="nav-item" data-page="sorting" type="button"><span class="icon">⇅</span>Sorting</button>
         <button class="nav-item" data-page="filters" type="button"><span class="icon">⧩</span>Filters</button>
         <button class="nav-item" data-page="display" type="button"><span class="icon">✎</span>Stream display</button>
@@ -84,12 +85,28 @@
             </div>
             <button class="ghost" id="rerun-setup" type="button">Run setup</button>
           </div>
+          <div class="glass row">
+            <div>
+              <div class="label">Share your settings</div>
+              <div class="subtle small">Save sorting, filters, sources and display to a file, or load one from a friend. Your debrid keys are never included.</div>
+            </div>
+            <div class="buttons">
+              <button class="ghost" id="export-settings" type="button">Export</button>
+              <button class="ghost" id="import-settings" type="button">Import</button>
+            </div>
+          </div>
         </section>
 
         <section class="page" data-page="debrid">
           <h1>Debrid</h1>
           <p class="subtle">Accounts Matzio uses to find cached streams and play them instantly.</p>
           <div class="debrid-cards" data-debrid></div>
+        </section>
+
+        <section class="page" data-page="sources">
+          <h1>Sources</h1>
+          <p class="subtle">Where Matzio looks for streams. All switched-on sources are searched at once and duplicates are merged; a source that is down or slow is simply skipped.</p>
+          <div class="check-list" id="source-cards"></div>
         </section>
 
         <section class="page" data-page="sorting">

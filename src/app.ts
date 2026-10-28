@@ -1,7 +1,9 @@
 // The app after setup: a sidebar of sections.
 import { api, type UpdateStatus } from "./api";
 import { listen } from "@tauri-apps/api/event";
+import { exportSettings, importSettings } from "./backup";
 import { renderFilters } from "./filters";
+import { renderSources } from "./sources";
 import { h, onChange, savePreferences, state } from "./state";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -33,7 +35,10 @@ function showStatus() {
 
 // ---------- Filters ----------
 
-const renderFilterPage = () => renderFilters($("filter-cards"));
+const renderFilterPage = () => {
+  renderFilters($("filter-cards"));
+  renderSources($("source-cards"));
+};
 
 // ---------- Stream display ----------
 
@@ -149,6 +154,8 @@ async function setUpUpdates() {
 export async function startApp(rerunSetup: () => void) {
   $("version").textContent = `Version ${(await api.appInfo()).version}`;
   $("rerun-setup").onclick = rerunSetup;
+  $("export-settings").onclick = exportSettings;
+  $("import-settings").onclick = importSettings;
   showStatus();
   onChange(() => {
     renderFilterPage();

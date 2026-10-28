@@ -1,4 +1,4 @@
-//! Runtime lookup from Stremio's Cinemeta metadata service.
+//! Runtime and title lookup from Stremio's Cinemeta metadata service.
 
 use std::{sync::LazyLock, time::Duration};
 
@@ -13,7 +13,11 @@ struct Response {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Meta {
+    name: Option<String>,
+    year: Option<String>,
+    release_info: Option<String>,
     runtime: Option<String>,
     #[serde(default)]
     videos: Vec<Video>,
@@ -49,6 +53,20 @@ pub async fn runtime(
         }
     }
     meta.runtime.as_deref().and_then(parse_runtime)
+}
+
+/// A title's name and first year, for sources that search by text.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Title {
+    pub name: String,
+    pub year: Option<u32>,
+}
+
+pub async fn title(http: &reqwest::Client, base: &str, kind: &str, imdb_id: &str) -> Option<Title> {
+    let url = format!("{base}/meta/{kind}/{imdb_id}.json");
+    let meta = http.get(url).send().await.ok()?.error_for_status().ok()?.json::<Response>().await.ok()?.meta?;
+    let year = meta.year.or(meta.release_info).and_then(|y| y.get(..4)?.parse().ok());
+    Some(Title { name: meta.name.filter(|n| !n.trim().is_empty())?, year })
 }
 
 /// Parses a Cinemeta runtime string such as `"142 min"`, `"2h 22m"`, or `"45"`.

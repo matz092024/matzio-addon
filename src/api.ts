@@ -24,11 +24,22 @@ export type Filters = {
   limits: { enabled: boolean; total: number; perResolution: number };
 };
 
+export type Sources = {
+  torrentio: boolean;
+  comet: boolean;
+  mediafusion: boolean;
+  torbox: boolean;
+  zilean: boolean;
+  knaben: boolean;
+  urls: Record<string, string>;
+};
+
 export type Preferences = {
   sortOrder: string[];
   speedMbps: number | null;
   displayStyle: string;
   filters: Filters;
+  sources: Sources;
 };
 
 export type Settings = Preferences & { autoUpdate: boolean; startWithWindows: boolean; setupComplete: boolean };

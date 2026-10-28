@@ -15,7 +15,7 @@ pub mod streams;
 pub mod torrent;
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     net::{Ipv4Addr, SocketAddr},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -101,7 +101,117 @@ impl AppState {
     }
 }
 
+/// How long one source may take before its results are left out.
+const SOURCE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Runs one source's search if it is switched on; a failing or slow source just adds nothing.
+async fn gather<E: std::fmt::Display>(
+    name: &str,
+    on: bool,
+    search: impl std::future::Future<Output = Result<Vec<torrent::Torrent>, E>>,
+) -> Vec<torrent::Torrent> {
+    if !on {
+        return Vec::new();
+    }
+    match tokio::time::timeout(SOURCE_TIMEOUT, search).await {
+        Ok(Ok(found)) => found,
+        Ok(Err(e)) => {
+            eprintln!("{name} search failed: {e}");
+            Vec::new()
+        }
+        Err(_) => {
+            eprintln!("{name} took longer than {}s", SOURCE_TIMEOUT.as_secs());
+            Vec::new()
+        }
+    }
+}
+
 impl AppState {
+    /// Searches every switched-on source at once and merges the results. A torrent found by
+    /// several sources is listed once, with whatever details any of them knew.
+    async fn search(
+        &self,
+        config: &Config,
+        kind: &str,
+        id: &str,
+        imdb_id: &str,
+        episode: Option<torrent::Episode>,
+    ) -> Vec<torrent::Torrent> {
+        let on = &config.preferences.sources;
+        let (http, e) = (&self.http, &*self.endpoints);
+        let url = |name: &str, default: &str| {
+            on.urls.get(name).map(|u| u.trim()).filter(|u| !u.is_empty()).unwrap_or(default).to_owned()
+        };
+        let (torrentio, comet, mediafusion, zilean) = (
+            url("torrentio", &e.torrentio),
+            url("comet", &e.comet),
+            url("mediafusion", &e.mediafusion),
+            url("zilean", &e.zilean),
+        );
+        let torbox_key = config.torbox_key.as_deref().unwrap_or_default();
+
+        let (from_addons, from_apis) = tokio::join!(
+            async {
+                tokio::join!(
+                    gather("Torrentio", on.torrentio, sources::addon::search(http, &torrentio, kind, id)),
+                    gather("Comet", on.comet, sources::addon::search(http, &comet, kind, id)),
+                    gather("MediaFusion", on.mediafusion, sources::addon::search(http, &mediafusion, kind, id)),
+                )
+            },
+            async {
+                tokio::join!(
+                    gather(
+                        "TorBox search",
+                        on.torbox && !torbox_key.is_empty(),
+                        sources::torbox::search(http, &e.torbox_search, torbox_key, imdb_id, episode),
+                    ),
+                    gather("Zilean", on.zilean, sources::zilean::search(http, &zilean, imdb_id, episode)),
+                    gather("Knaben", on.knaben, async {
+                        match sources::cinemeta::title(http, &e.cinemeta, kind, imdb_id).await {
+                            Some(title) => sources::knaben::search(http, &e.knaben, &sources::knaben::query(&title, episode)).await,
+                            None => Ok(Vec::new()),
+                        }
+                    }),
+                )
+            }
+        );
+
+        // Addons list the episode's own file; the others list whole torrents, which for a
+        // series can be season packs (whose size says nothing about the episode) or other episodes.
+        let (a, b, c) = from_addons;
+        let (d, f, g) = from_apis;
+        let whole_torrents = [d, f, g].into_iter().flatten().filter_map(|mut t| {
+            if let Some(ep) = episode {
+                if t.is_other_episode(ep) {
+                    return None;
+                }
+                if !torrent::matches_episode(&t.name, ep) {
+                    t.size_bytes = None;
+                }
+            }
+            Some(t)
+        });
+
+        let mut merged: Vec<torrent::Torrent> = Vec::new();
+        let mut index: HashMap<String, usize> = HashMap::new();
+        for t in [a, b, c].into_iter().flatten().chain(whole_torrents) {
+            match index.get(&t.info_hash) {
+                Some(&i) => {
+                    let known = &mut merged[i];
+                    known.filename = known.filename.take().or(t.filename);
+                    known.size_bytes = known.size_bytes.or(t.size_bytes);
+                    known.seeders = known.seeders.or(t.seeders);
+                    known.notes = known.notes.take().or(t.notes);
+                }
+                None => {
+                    index.insert(t.info_hash.clone(), merged.len());
+                    merged.push(t);
+                }
+            }
+        }
+        merged
+    }
+
     /// Checks a debrid API key (not necessarily the saved one).
     pub async fn check_key(&self, service: Service, key: &str) -> Result<debrid::Account, DebridError> {
         debrid::account(&self.http, &self.endpoints, service, key.trim()).await
@@ -143,27 +253,15 @@ async fn stream(State(state): State<AppState>, Path((kind, file)): Path<(String,
     let prefs = &config.preferences;
     let speed_limit = prefs.speed_mbps.filter(|&mbps| prefs.filters.speed.enabled && mbps > 0.0);
 
-    let (search_res, runtime) = tokio::join!(
-        sources::torrentio::search(&state.http, &state.endpoints.torrentio, &kind, id),
-        async {
-            let _ = speed_limit?;
-            state.runtime(&kind, id, imdb_id, episode).await
-        }
-    );
+    let (torrents, runtime) = tokio::join!(state.search(&config, &kind, id, imdb_id, episode), async {
+        let _ = speed_limit?;
+        state.runtime(&kind, id, imdb_id, episode).await
+    });
 
-    let torrents = match search_res {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("torrent search failed for {id}: {e}");
-            Vec::new()
-        }
-    };
     let cx = filters::Context { speed_mbps: speed_limit, runtime };
-    let mut seen = HashSet::new();
     // Each kept torrent with whether it failed a "show at the bottom" check.
     let mut kept: Vec<(torrent::Torrent, bool)> = torrents
         .into_iter()
-        .filter(|t| seen.insert(t.info_hash.clone()))
         .filter_map(|t| {
             let verdict = filters::judge(&t, &prefs.filters, cx);
             (!verdict.hidden).then_some((t, verdict.demoted))

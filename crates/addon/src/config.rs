@@ -43,6 +43,38 @@ pub struct Preferences {
     /// How a stream is labelled in Stremio's picker: "compact" or "detailed".
     pub display_style: String,
     pub filters: Filters,
+    pub sources: Sources,
+}
+
+/// Where torrents are searched. Several can be on; results are merged and duplicates removed.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Sources {
+    pub torrentio: bool,
+    pub comet: bool,
+    pub mediafusion: bool,
+    /// TorBox's own search; only used with a TorBox key.
+    pub torbox: bool,
+    pub zilean: bool,
+    pub knaben: bool,
+    /// Addresses replacing the public instance of "torrentio", "comet", "mediafusion" or
+    /// "zilean", such as a self-hosted one. May hold a configured addon link, so it is
+    /// never part of an exported settings file.
+    pub urls: BTreeMap<String, String>,
+}
+
+impl Default for Sources {
+    fn default() -> Self {
+        Self {
+            torrentio: true,
+            comet: true,
+            mediafusion: true,
+            torbox: true,
+            zilean: false,
+            knaben: false,
+            urls: BTreeMap::new(),
+        }
+    }
 }
 
 /// Every sort key, in the default order.
@@ -56,6 +88,7 @@ impl Default for Preferences {
             speed_mbps: None,
             display_style: "detailed".into(),
             filters: Filters::default(),
+            sources: Sources::default(),
         }
     }
 }
@@ -196,6 +229,7 @@ struct SavedPreferences {
     speed_mbps: Option<f64>,
     display_style: Option<String>,
     filters: Option<Filters>,
+    sources: Sources,
     filter_by_speed: Option<bool>,
     exclude_resolutions: Option<Vec<String>>,
 }
@@ -226,6 +260,7 @@ impl From<SavedPreferences> for Preferences {
             speed_mbps: saved.speed_mbps,
             display_style: saved.display_style.unwrap_or(defaults.display_style),
             filters,
+            sources: saved.sources,
         }
     }
 }
@@ -236,6 +271,11 @@ pub type SharedConfig = Arc<RwLock<Config>>;
 #[derive(Clone, Debug)]
 pub struct Endpoints {
     pub torrentio: String,
+    pub comet: String,
+    pub mediafusion: String,
+    pub torbox_search: String,
+    pub zilean: String,
+    pub knaben: String,
     pub cinemeta: String,
     pub torbox: String,
     pub real_debrid: String,
@@ -245,6 +285,11 @@ impl Default for Endpoints {
     fn default() -> Self {
         Self {
             torrentio: "https://torrentio.strem.fun".into(),
+            comet: "https://comet.elfhosted.com".into(),
+            mediafusion: "https://mediafusion.elfhosted.com".into(),
+            torbox_search: "https://search-api.torbox.app".into(),
+            zilean: "https://zilean.elfhosted.com".into(),
+            knaben: "https://api.knaben.org/v1".into(),
             cinemeta: "https://v3-cinemeta.strem.io".into(),
             torbox: "https://api.torbox.app/v1/api".into(),
             real_debrid: "https://api.real-debrid.com/rest/1.0".into(),

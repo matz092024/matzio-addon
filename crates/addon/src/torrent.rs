@@ -92,6 +92,12 @@ impl Torrent {
         words.iter().position(|w| keyword_matches(&text, w))
     }
 
+    /// For a series: whether this is clearly a different episode (named, but not ours).
+    pub fn is_other_episode(&self, ep: Episode) -> bool {
+        static ANY_EPISODE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)s\d{1,2}[ ._-]*e\d{1,3}(?:\D|$)").unwrap());
+        ANY_EPISODE.is_match(&self.name) && !matches_episode(&self.name, ep)
+    }
+
     pub fn magnet(&self) -> String {
         format!("magnet:?xt=urn:btih:{}", self.info_hash)
     }
@@ -397,7 +403,7 @@ pub fn format_size(bytes: u64) -> String {
 
 const VIDEO_EXTENSIONS: &[&str] = &["mkv", "mp4", "avi", "m4v", "mov", "webm", "ts", "m2ts", "wmv", "mpg", "mpeg"];
 
-fn is_video(name: &str) -> bool {
+pub fn is_video_name(name: &str) -> bool {
     name.rsplit_once('.').is_some_and(|(_, ext)| VIDEO_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
 }
 
@@ -405,7 +411,8 @@ fn basename(path: &str) -> &str {
     path.rsplit(['/', '\\']).next().unwrap_or(path)
 }
 
-fn matches_episode(name: &str, ep: Episode) -> bool {
+/// Whether a file or release name is this episode, as in "S01E02" or "1x02".
+pub fn matches_episode(name: &str, ep: Episode) -> bool {
     let re = Regex::new(&format!(
         r"(?i)(?:s0*{s}[ ._-]*e0*{e}(?:\D|$)|\b0*{s}x0*{e}(?:\D|$))",
         s = ep.season,
@@ -435,7 +442,7 @@ pub fn pick_file<'a, Id>(
             return Some(f);
         }
     }
-    let videos = || files.iter().filter(|f| is_video(&f.path));
+    let videos = || files.iter().filter(|f| is_video_name(&f.path));
     if let Some(ep) = episode {
         if let Some(f) = videos().filter(|f| matches_episode(&f.path, ep)).max_by_key(|f| f.size) {
             return Some(f);
