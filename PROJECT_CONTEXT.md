@@ -110,6 +110,7 @@ through the API, which is why releases are driven by the version bump.
 
 ## Current status (2026-10-28)
 
+- **0.6.0**: custom stream labels from the user's own templates (PR #16).
 - **0.5.0**: subtitles from OpenSubtitles and SubDL with the user's own keys (PR #14).
 - **0.4.0**: switchable filters, more sources with switches, settings
   export/import, working drag-to-rank (PR #11).
@@ -148,7 +149,7 @@ OpenSubtitles and SubDL request formats were written from their docs without liv
 access; check them on a real install. Users who installed the addon in Stremio before
 0.5 may need to reinstall it once so Stremio sees the new subtitles resource.
 
-## Custom stream labels (PR pending)
+## Custom stream labels (since 0.6)
 
 `displayStyle` can be `compact`, `detailed` or `custom`. Custom uses `nameTemplate` (left
 column in Stremio's picker) and `titleTemplate` (description) from preferences, filled by
