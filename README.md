@@ -18,7 +18,11 @@ and plays them through your own debrid account.
   the addon server are running. Closing the window never quits; use
   *Quit Matzio* in the tray menu.
 - **Addon server** (`crates/addon/`): serves the Stremio addon protocol on
-  `http://127.0.0.1:7777/manifest.json`, reachable only from this PC.
+  `http://127.0.0.1:7777/<token>/manifest.json`, reachable only from this PC.
+  - `<token>` is a random secret made on first run and saved in settings.
+    Every addon route sits behind it, so a website open in your browser
+    can't call the addon (localhost is reachable from any page; the token
+    isn't). *New addon link* on the Home page replaces it.
   - Torrent results come from Torrentio (`sources/`).
   - TorBox results are filtered to cached ones with its bulk cache check.
     Real-Debrid has no cache check any more, so its results are checked when
@@ -36,7 +40,8 @@ and plays them through your own debrid account.
 ## Installing in Stremio
 
 With Matzio running, open the settings window and click **Install in Stremio**,
-or paste `http://127.0.0.1:7777/manifest.json` into Stremio's addon search box.
+or copy the link shown there (`http://127.0.0.1:7777/<token>/manifest.json`) into
+Stremio's addon search box. Keep that link private.
 
 ## Development
 

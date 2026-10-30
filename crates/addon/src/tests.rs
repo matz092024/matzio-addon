@@ -23,7 +23,9 @@ const CACHED: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const UNCACHED: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 /// Only found by the optional sources.
 const EXTRA: &str = "cccccccccccccccccccccccccccccccccccccccc";
-const BASE: &str = "http://127.0.0.1:7777";
+const TOKEN: &str = "0123456789abcdef0123456789abcdef";
+/// Where the addon's own links start.
+const BASE: &str = "http://127.0.0.1:7777/0123456789abcdef0123456789abcdef";
 
 /// Starts a mock of the upstream services and returns its base URL and
 /// a log of the calls that change state on a debrid account.
@@ -300,7 +302,7 @@ async fn state(rd: Option<&str>, torbox: Option<&str>) -> (AppState, Arc<Mutex<V
         subdl_files: format!("{mock}/subdlfiles"),
     };
     let config = Arc::new(RwLock::new(Config::new(rd.map(Into::into), torbox.map(Into::into))));
-    (AppState::new(config, endpoints, BASE), calls)
+    (AppState::new(config, endpoints, "http://127.0.0.1:7777", TOKEN), calls)
 }
 
 async fn app(rd: Option<&str>, torbox: Option<&str>) -> (Router, Arc<Mutex<Vec<String>>>) {
@@ -308,7 +310,12 @@ async fn app(rd: Option<&str>, torbox: Option<&str>) -> (Router, Arc<Mutex<Vec<S
     (router(state), calls)
 }
 
+/// Requests an addon route, with the token in front as Stremio sends it.
 async fn get_raw(app: &Router, uri: &str) -> (StatusCode, axum::http::HeaderMap, Vec<u8>) {
+    get_exact(app, &format!("/{TOKEN}{uri}")).await
+}
+
+async fn get_exact(app: &Router, uri: &str) -> (StatusCode, axum::http::HeaderMap, Vec<u8>) {
     let res = app
         .clone()
         .oneshot(Request::get(uri).header("origin", "https://web.stremio.com").body(Body::empty()).unwrap())
@@ -334,6 +341,71 @@ async fn serves_manifest() {
     let body = body.unwrap();
     assert_eq!(body["id"], ADDON_ID);
     assert_eq!(body["resources"], json!(["stream", "subtitles"]));
+}
+
+#[tokio::test]
+async fn answers_only_behind_the_token() {
+    let (app, calls) = app(Some("rd-key"), Some("tb-key")).await;
+    let wrong = "ffffffffffffffffffffffffffffffff";
+    for uri in [
+        "/manifest.json".to_owned(),
+        format!("/play/realdebrid/{CACHED}"),
+        format!("/play/torbox/{CACHED}"),
+        "/subtitles/movie/tt0111161.json".into(),
+        "/subtitle/subdl/1-2.srt".into(),
+        format!("/{wrong}/manifest.json"),
+        format!("/{wrong}/play/realdebrid/{CACHED}"),
+        format!("/{}/manifest.json", &TOKEN[..31]),
+        format!("/{TOKEN}x/manifest.json"),
+        format!("/{}/manifest.json", TOKEN.to_uppercase()),
+        format!("/{TOKEN}"),
+    ] {
+        assert_eq!(get_exact(&app, &uri).await.0, StatusCode::NOT_FOUND, "{uri}");
+    }
+    assert!(calls.lock().unwrap().is_empty(), "nothing was added to a debrid account");
+
+    // An install from before tokens only learns that it has to be installed again.
+    let (status, _, body) = get_exact(&app, "/stream/movie/tt0111161.json").await;
+    assert_eq!(status, StatusCode::OK);
+    let body: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["streams"].as_array().unwrap().len(), 1);
+    assert!(body["streams"][0]["title"].as_str().unwrap().contains("Install in Stremio"));
+    assert!(body["streams"][0].get("url").is_none());
+    assert_eq!(get_exact(&app, "/").await.0, StatusCode::OK);
+    assert_eq!(get_raw(&app, "/").await.0, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_new_token_replaces_the_old_one() {
+    let (state, _) = state(None, None).await;
+    let app = router(state.clone());
+    assert_eq!(state.manifest_url(), format!("{BASE}/manifest.json"));
+    let token = new_token();
+    assert!(valid_token(&token) && token != TOKEN && token != new_token());
+    state.set_token(&token);
+    assert_eq!(state.manifest_url(), format!("http://127.0.0.1:7777/{token}/manifest.json"));
+    assert_eq!(get_raw(&app, "/manifest.json").await.0, StatusCode::NOT_FOUND);
+    let (status, _, body) = get_exact(&app, &format!("/{token}/stream/movie/tt0111161.json")).await;
+    assert_eq!(status, StatusCode::OK);
+    let body: Value = serde_json::from_slice(&body).unwrap();
+    assert!(body["streams"][0]["externalUrl"].as_str().unwrap().contains(&token));
+}
+
+#[tokio::test]
+async fn cors_allows_reads_only() {
+    let (app, _) = app(None, None).await;
+    let preflight = |method: &str| {
+        Request::options(format!("/{TOKEN}/manifest.json"))
+            .header("origin", "https://web.stremio.com")
+            .header("access-control-request-method", method)
+            .body(Body::empty())
+            .unwrap()
+    };
+    let res = app.clone().oneshot(preflight("GET")).await.unwrap();
+    assert_eq!(res.headers()["access-control-allow-origin"], "*");
+    let methods = res.headers()["access-control-allow-methods"].to_str().unwrap().to_owned();
+    assert!(methods.contains("GET") && !methods.contains("POST"), "{methods}");
+    assert!(!res.headers().contains_key("access-control-allow-credentials"));
 }
 
 #[tokio::test]
@@ -456,7 +528,7 @@ async fn merges_sources_and_respects_their_switches() {
             .as_array()
             .unwrap()
             .iter()
-            .map(|s| s["url"].as_str().unwrap().split('/').nth(5).unwrap().split('?').next().unwrap().to_owned())
+            .map(|s| s["url"].as_str().unwrap().rsplit('/').next().unwrap().split('?').next().unwrap().to_owned())
             .collect()
     };
 
@@ -648,12 +720,12 @@ async fn binds_and_serves_on_localhost() {
     let listener = bind(0).await.unwrap();
     let addr = listener.local_addr().unwrap();
     assert!(addr.ip().is_loopback());
-    assert_eq!(manifest_url(addr), format!("http://127.0.0.1:{}/manifest.json", addr.port()));
-    let state = AppState::new(Default::default(), Endpoints::default(), &base_url(addr));
+    let state = AppState::new(Default::default(), Endpoints::default(), &origin(addr), TOKEN);
+    assert_eq!(state.manifest_url(), format!("http://127.0.0.1:{}/{TOKEN}/manifest.json", addr.port()));
     tokio::spawn(serve(listener, state));
     let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    stream.write_all(b"GET /manifest.json HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").await.unwrap();
+    stream.write_all(format!("GET /{TOKEN}/manifest.json HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
     let mut out = String::new();
     stream.read_to_string(&mut out).await.unwrap();
     assert!(out.starts_with("HTTP/1.1 200"), "{out}");

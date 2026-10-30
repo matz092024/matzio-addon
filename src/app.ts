@@ -5,7 +5,7 @@ import { exportSettings, importSettings } from "./backup";
 import { renderFilters } from "./filters";
 import { renderSources } from "./sources";
 import { renderSubtitles } from "./subtitles";
-import { h, onChange, savePreferences, state } from "./state";
+import { emit, h, onChange, savePreferences, state, toast } from "./state";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const app = $("app");
@@ -31,6 +31,17 @@ function showStatus() {
   } else {
     $("status-text").textContent = "Running";
     pill.classList.add("good");
+  }
+}
+
+async function newAddonLink() {
+  if (!confirm("Make a new addon link? The current one stops working right away, and you'll need to install Matzio in Stremio again.")) return;
+  try {
+    state.addon = await api.newAddonLink();
+    emit();
+    toast("New link made. Install Matzio in Stremio again.");
+  } catch (e) {
+    toast(`Couldn't make a new link: ${e}`);
   }
 }
 
@@ -232,6 +243,7 @@ export async function startApp(rerunSetup: () => void) {
   $("rerun-setup").onclick = rerunSetup;
   $("export-settings").onclick = exportSettings;
   $("import-settings").onclick = importSettings;
+  $("new-link").onclick = newAddonLink;
   showStatus();
   onChange(() => {
     renderFilterPage();

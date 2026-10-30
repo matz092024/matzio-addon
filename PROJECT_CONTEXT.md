@@ -34,8 +34,9 @@ rejected for idle resource use.
 
 ```
 crates/addon/            Stremio addon server (Rust library, axum)
-  src/lib.rs             routes: /manifest.json, /stream/..., /play/{service}/{hash},
-                         /subtitles/... (list), /subtitle/{provider}/{file}.srt (download)
+  src/lib.rs             routes, all under /{token}/: /manifest.json, /stream/..., /play/{service}/{hash},
+                         /subtitles/... (list), /subtitle/{provider}/{file}.srt (download).
+                         The token is per install (settings.json addonToken); wrong/missing → 404.
   src/config.rs          debrid keys + preferences (shared, live-updated) + service base URLs
   src/streams.rs         ranks and formats Stremio stream entries
   src/labels.rs          the "custom" display style: {variable} templates, [optional parts]
