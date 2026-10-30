@@ -7,7 +7,9 @@
 //! direct link. Subtitles come from `/subtitles/...`, and each file from
 //! `/subtitle/...` when the player opens it. Debrid and subtitle keys never leave
 //! this PC except to their own service.
-//! Everything here binds to localhost only.
+//! Everything here binds to localhost only, and every route sits behind a random
+//! per-install token (`/<token>/manifest.json`), so a web page open in the user's
+//! browser can't reach it: localhost is reachable from any site, the token isn't.
 
 pub mod config;
 pub mod debrid;
@@ -21,13 +23,13 @@ pub mod torrent;
 use std::{
     collections::HashMap,
     net::{Ipv4Addr, SocketAddr},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
     time::{Duration, Instant},
 };
 
 use axum::{
-    extract::{Path, Query, State},
-    http::{header, StatusCode, Uri},
+    extract::{Path, Query, Request, State},
+    http::{header, Method, StatusCode, Uri},
     response::{Html, IntoResponse, Redirect, Response},
     routing::get,
     Json, Router,
@@ -35,7 +37,8 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
-use tower_http::cors::CorsLayer;
+use tower::ServiceExt;
+use tower_http::cors::{Any, CorsLayer};
 
 pub use config::{Config, Endpoints, Preferences, SharedConfig};
 use debrid::{DebridError, PlayRequest, Service};
@@ -69,15 +72,17 @@ pub struct AppState {
     config: SharedConfig,
     endpoints: Arc<Endpoints>,
     http: reqwest::Client,
-    base_url: Arc<str>,
+    origin: Arc<str>,
+    token: Arc<RwLock<Arc<str>>>,
     links: Arc<Mutex<HashMap<(Service, PlayRequest), (Instant, String)>>>,
     runtimes: Arc<Mutex<HashMap<String, Duration>>>,
     subtitles: Arc<subtitles::Cache>,
 }
 
 impl AppState {
-    /// `base_url` is how Stremio reaches this server, e.g. `http://127.0.0.1:7777`.
-    pub fn new(config: SharedConfig, endpoints: Endpoints, base_url: &str) -> Self {
+    /// `origin` is how Stremio reaches this server, e.g. `http://127.0.0.1:7777`, and `token`
+    /// the secret path segment every request must start with: see [`new_token`].
+    pub fn new(config: SharedConfig, endpoints: Endpoints, origin: &str, token: &str) -> Self {
         // reqwest is built without a bundled TLS provider; use ring, which the app already links.
         let _ = rustls::crypto::ring::default_provider().install_default();
         let http = reqwest::Client::builder()
@@ -90,11 +95,35 @@ impl AppState {
             config,
             endpoints: Arc::new(endpoints),
             http,
-            base_url: base_url.trim_end_matches('/').into(),
+            origin: origin.trim_end_matches('/').into(),
+            token: Arc::new(RwLock::new(token.into())),
             links: Default::default(),
             runtimes: Default::default(),
             subtitles: Default::default(),
         }
+    }
+
+    /// Where every addon URL starts, token included, e.g. `http://127.0.0.1:7777/<token>`.
+    pub fn base_url(&self) -> String {
+        format!("{}/{}", self.origin, self.token.read().unwrap())
+    }
+
+    /// The URL users paste into Stremio, or open as a `stremio://` link.
+    pub fn manifest_url(&self) -> String {
+        format!("{}/manifest.json", self.base_url())
+    }
+
+    /// Replaces the token. Links handed out with the old one stop working at once, so the
+    /// addon has to be installed in Stremio again.
+    pub fn set_token(&self, token: &str) {
+        *self.token.write().unwrap() = token.into();
+    }
+
+    fn token_matches(&self, given: &str) -> bool {
+        let token = self.token.read().unwrap();
+        // Compare every byte, so the time taken doesn't hint at how much of a guess was right.
+        given.len() == token.len()
+            && given.bytes().zip(token.bytes()).fold(0, |diff, (a, b)| diff | (a ^ b)) == 0
     }
 
     /// The debrid link most recently opened for this file, if it is still fresh.
@@ -250,8 +279,43 @@ impl AppState {
     }
 }
 
-/// Builds the HTTP router. Stremio's web and desktop clients need CORS.
+/// A new random token for the addon's URLs: 128 bits, as 32 hex characters.
+pub fn new_token() -> String {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).expect("the system has a random number source");
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Whether a saved token looks like one [`new_token`] made (a hand-edited or damaged one
+/// is replaced rather than trusted).
+pub fn valid_token(token: &str) -> bool {
+    token.len() >= 32 && token.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
+/// Builds the HTTP router. The addon itself only answers under `/<token>/`; outside it there
+/// is just the "Matzio is running" page and, for an install from before tokens, a hint to
+/// install again.
+///
+/// Stremio's web client fetches the manifest, streams and subtitles from another origin, so
+/// CORS stays open to any origin for reads. That is safe because a page can only call a URL
+/// it knows, and it can't learn the token: cross-origin reads of anything else get nothing.
 pub fn router(state: AppState) -> Router {
+    let unlocked = addon_routes().with_state(state.clone());
+    Router::new()
+        .route("/", get(home))
+        .route("/stream/{kind}/{file}", get(reinstall_hint))
+        .fallback(move |State(state): State<AppState>, request: Request| unlock(state, unlocked.clone(), request))
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods([Method::GET, Method::HEAD])
+                .allow_headers(Any),
+        )
+        .with_state(state)
+}
+
+/// The routes behind the token, as Stremio sees them once the token is taken off the path.
+fn addon_routes() -> Router<AppState> {
     Router::new()
         .route("/", get(home))
         .route("/manifest.json", get(|| async { Json(manifest()) }))
@@ -260,8 +324,37 @@ pub fn router(state: AppState) -> Router {
         .route("/subtitles/{kind}/{file}", get(subtitles_plain))
         .route("/subtitles/{kind}/{id}/{extra}", get(subtitles_with_extra))
         .route("/subtitle/{provider}/{file}", get(subtitle_file))
-        .layer(CorsLayer::permissive())
-        .with_state(state)
+}
+
+/// Checks the token at the start of the path and passes the rest on to the addon's routes.
+/// A missing or wrong token gets the same plain 404 as a page that doesn't exist.
+async fn unlock(state: AppState, unlocked: Router, mut request: Request) -> Response {
+    let path = request.uri().path();
+    let Some((token, rest)) = path.strip_prefix('/').and_then(|p| p.split_once('/')) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if !state.token_matches(token) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let rest = match request.uri().query() {
+        Some(query) => format!("/{rest}?{query}"),
+        None => format!("/{rest}"),
+    };
+    let Ok(uri) = rest.parse::<Uri>() else { return StatusCode::BAD_REQUEST.into_response() };
+    *request.uri_mut() = uri;
+    match unlocked.oneshot(request).await {
+        Ok(response) => response,
+        Err(never) => match never {},
+    }
+}
+
+/// Stremio still asks an addon installed from the old, token-less link for streams; answer
+/// with one entry saying how to fix it, and nothing else.
+async fn reinstall_hint() -> Json<Value> {
+    Json(json!({ "streams": [{
+        "name": "Matzio",
+        "title": "🔒 Matzio's link has changed\nOpen Matzio from the tray and click Install in Stremio",
+    }] }))
 }
 
 async fn home() -> Html<&'static str> {
@@ -282,7 +375,7 @@ async fn stream(State(state): State<AppState>, Path((kind, file)): Path<(String,
 
     let config = state.config.read().unwrap().clone();
     if config.real_debrid_key.is_none() && config.torbox_key.is_none() {
-        return Json(json!({ "streams": [streams::setup_hint(&state.base_url)] })).into_response();
+        return Json(json!({ "streams": [streams::setup_hint(&state.base_url())] })).into_response();
     }
 
     let prefs = &config.preferences;
@@ -327,10 +420,11 @@ async fn stream(State(state): State<AppState>, Path((kind, file)): Path<(String,
     candidates.sort_by(|a, b| a.2.cmp(&b.2).then_with(|| streams::compare(a.1, a.3, b.1, b.3, prefs)));
     let candidates = filters::limit(candidates, &prefs.filters, |c| c.3.resolution());
 
+    let base_url = state.base_url();
     let list: Vec<_> = candidates
         .into_iter()
         .map(|(service, cached, _, t)| {
-            streams::stream_for(&state.base_url, service, cached, t, episode, prefs)
+            streams::stream_for(&base_url, service, cached, t, episode, prefs)
         })
         .collect();
     Json(json!({ "streams": list })).into_response()
@@ -437,7 +531,8 @@ async fn list_subtitles(state: AppState, kind: &str, id: &str, extra: HashMap<St
     };
     let found = subtitles::search(&state.http, &state.endpoints, &state.subtitles, &config.subtitle_keys, prefs, &request).await;
     let ranked = subtitles::rank(found, prefs, &languages, filename);
-    let list: Vec<_> = ranked.iter().map(|s| subtitles::to_stremio(&state.base_url, s, episode)).collect();
+    let base_url = state.base_url();
+    let list: Vec<_> = ranked.iter().map(|s| subtitles::to_stremio(&base_url, s, episode)).collect();
     Json(json!({ "subtitles": list })).into_response()
 }
 
@@ -476,14 +571,9 @@ pub async fn serve(listener: TcpListener, state: AppState) -> std::io::Result<()
     axum::serve(listener, router(state)).await
 }
 
-/// The base URL Stremio uses to reach the addon.
-pub fn base_url(addr: SocketAddr) -> String {
+/// Where the server is reached, without the token: pass it to [`AppState::new`].
+pub fn origin(addr: SocketAddr) -> String {
     format!("http://{addr}")
-}
-
-/// The URL users paste into Stremio, or open as a `stremio://` link.
-pub fn manifest_url(addr: SocketAddr) -> String {
-    format!("{}/manifest.json", base_url(addr))
 }
 
 #[cfg(test)]

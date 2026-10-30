@@ -4,6 +4,7 @@
 use std::{fs, path::PathBuf, sync::Mutex};
 
 pub use matzio_addon::{config::SubtitleKeys, Preferences};
+use matzio_addon::{new_token, valid_token};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
@@ -20,6 +21,9 @@ pub struct Settings {
     /// OpenSubtitles and SubDL keys, also only in this file.
     #[serde(flatten)]
     pub subtitle_keys: SubtitleKeys,
+    /// The secret first part of the addon's URLs, so only Stremio (which was given the
+    /// link) can use the addon, not any web page that tries localhost. Made on first run.
+    pub addon_token: Option<String>,
     /// The first-run setup was finished (or skipped); until then the window opens on it.
     pub setup_complete: bool,
     #[serde(flatten)]
@@ -34,6 +38,7 @@ impl Default for Settings {
             real_debrid_key: None,
             torbox_key: None,
             subtitle_keys: SubtitleKeys::default(),
+            addon_token: None,
             setup_complete: false,
             preferences: Preferences::default(),
         }
@@ -55,7 +60,20 @@ impl SettingsStore {
             .and_then(|p| fs::read_to_string(p).ok())
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
-        Self { path, current: Mutex::new(current) }
+        let store = Self { path, current: Mutex::new(current) };
+        if !store.get().addon_token.as_deref().is_some_and(valid_token) {
+            if let Err(e) = store.update(|s| s.addon_token = Some(new_token())) {
+                // Still runs with the new token; it just changes again next start.
+                eprintln!("could not save the addon token: {e}");
+            }
+        }
+        store
+    }
+
+    /// The token the addon's URLs start with; see [`Settings::addon_token`].
+    pub fn addon_token(&self) -> String {
+        let mut current = self.current.lock().unwrap();
+        current.addon_token.get_or_insert_with(new_token).clone()
     }
 
     pub fn get(&self) -> Settings {

@@ -80,6 +80,7 @@ export type SubtitleCheck = { ok: boolean; message: string };
 export const api = {
   addonStatus: () => invoke<AddonStatus>("addon_status"),
   installInStremio: () => invoke("install_in_stremio"),
+  newAddonLink: () => invoke<AddonStatus>("new_addon_link"),
   appInfo: () => invoke<{ version: string }>("app_info"),
   getSettings: () => invoke<Settings>("get_settings"),
   setAutoUpdate: (enabled: boolean) => invoke<Settings>("set_auto_update", { enabled }),

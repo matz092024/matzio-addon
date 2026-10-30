@@ -8,7 +8,7 @@ mod updates;
 use std::sync::{Arc, RwLock};
 
 use matzio_addon::{
-    base_url, bind, debrid::Service, labels, manifest_url, serve, streams, subtitles::Provider, AppState, Config, Endpoints,
+    bind, debrid::Service, labels, new_token, origin, serve, streams, subtitles::Provider, AppState, Config, Endpoints,
     SharedConfig, DEFAULT_PORT,
 };
 use serde::Serialize;
@@ -27,7 +27,15 @@ use updates::{UpdateStatus, Updates};
 
 const SETTINGS_LABEL: &str = "settings";
 
-/// Whether the addon server came up, as shown in the settings window.
+/// Whether the addon server came up. Kept as started; the link itself comes from the
+/// addon, since it changes with the token.
+#[derive(Clone)]
+enum Startup {
+    Running,
+    Failed(String),
+}
+
+/// What the settings window shows about the addon.
 #[derive(Clone, Serialize)]
 #[serde(tag = "state", rename_all = "camelCase", rename_all_fields = "camelCase")]
 enum AddonStatus {
@@ -36,6 +44,13 @@ enum AddonStatus {
 }
 
 impl AddonStatus {
+    fn of(startup: &Startup, addon: &AppState) -> Self {
+        match startup {
+            Startup::Running => AddonStatus::Running { manifest_url: addon.manifest_url() },
+            Startup::Failed(error) => AddonStatus::Failed { error: error.clone() },
+        }
+    }
+
     fn stremio_link(&self) -> Option<String> {
         match self {
             // Stremio installs addons from stremio:// links to the manifest.
@@ -48,14 +63,28 @@ impl AddonStatus {
 }
 
 #[tauri::command]
-fn addon_status(status: State<AddonStatus>) -> AddonStatus {
-    status.inner().clone()
+fn addon_status(startup: State<Startup>, addon: State<AppState>) -> AddonStatus {
+    AddonStatus::of(&startup, &addon)
 }
 
 #[tauri::command]
-fn install_in_stremio(app: AppHandle, status: State<AddonStatus>) -> Result<(), String> {
-    let link = status.stremio_link().ok_or("The addon is not running")?;
+fn install_in_stremio(app: AppHandle, startup: State<Startup>, addon: State<AppState>) -> Result<(), String> {
+    let link = AddonStatus::of(&startup, &addon).stremio_link().ok_or("The addon is not running")?;
     app.opener().open_url(link, None::<&str>).map_err(|e| e.to_string())
+}
+
+/// Makes a new addon link and stops the old one working, for when the link was shared or
+/// leaked. Stremio then needs the addon installed again from the new link.
+#[tauri::command]
+fn new_addon_link(
+    store: State<SettingsStore>,
+    startup: State<Startup>,
+    addon: State<AppState>,
+) -> Result<AddonStatus, String> {
+    let token = new_token();
+    store.update(|s| s.addon_token = Some(token.clone()))?;
+    addon.set_token(&token);
+    Ok(AddonStatus::of(&startup, &addon))
 }
 
 #[derive(Serialize)]
@@ -251,24 +280,23 @@ async fn check_subtitle_key(addon: State<'_, AppState>, provider: String, keys: 
     })
 }
 
-fn start_addon(config: SharedConfig) -> (AppState, AddonStatus) {
+fn start_addon(config: SharedConfig, token: &str) -> (AppState, Startup) {
     match tauri::async_runtime::block_on(bind(DEFAULT_PORT)) {
         Ok(listener) => {
             let addr = listener.local_addr().expect("bound socket has an address");
-            let state = AppState::new(config, Endpoints::default(), &base_url(addr));
-            let url = manifest_url(addr);
+            let state = AppState::new(config, Endpoints::default(), &origin(addr), token);
             let server_state = state.clone();
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = serve(listener, server_state).await {
                     eprintln!("addon server stopped: {e}");
                 }
             });
-            (state, AddonStatus::Running { manifest_url: url })
+            (state, Startup::Running)
         }
         Err(e) => {
             // Still build the state so keys can be checked and saved from the window.
-            let state = AppState::new(config, Endpoints::default(), &format!("http://127.0.0.1:{DEFAULT_PORT}"));
-            (state, AddonStatus::Failed { error: format!("Could not use port {DEFAULT_PORT}: {e}") })
+            let state = AppState::new(config, Endpoints::default(), &format!("http://127.0.0.1:{DEFAULT_PORT}"), token);
+            (state, Startup::Failed(format!("Could not use port {DEFAULT_PORT}: {e}")))
         }
     }
 }
@@ -312,7 +340,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id.as_ref() {
             "open" => open_settings(app),
             "install" => {
-                let _ = install_in_stremio(app.clone(), app.state());
+                let _ = install_in_stremio(app.clone(), app.state(), app.state());
             }
             "update" => {
                 // Show progress in the window, then follow the auto-update setting.
@@ -345,6 +373,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             addon_status,
             install_in_stremio,
+            new_addon_link,
             app_info,
             get_settings,
             set_auto_update,
@@ -366,9 +395,9 @@ pub fn run() {
         .setup(|app| {
             let store = SettingsStore::load(app.handle());
             let config: SharedConfig = Arc::new(RwLock::new(config_from(&store.get())));
-            let (addon, status) = start_addon(config.clone());
-            let failed = matches!(status, AddonStatus::Failed { .. });
-            app.manage(status);
+            let (addon, startup) = start_addon(config.clone(), &store.addon_token());
+            let failed = matches!(startup, Startup::Failed(_));
+            app.manage(startup);
             let first_run = !store.get().setup_complete;
             if let Err(e) = apply_start_with_windows(app.handle(), store.get().start_with_windows) {
                 eprintln!("could not update the Windows startup entry: {e}");

@@ -30,7 +30,7 @@ function renderInstall(el: HTMLElement) {
   el.replaceChildren(
     h("div", { class: "field" }, h("input", { readOnly: true, value: addon.manifestUrl, ariaLabel: "Addon link" }), copy),
     install,
-    h("p", { class: "subtle small center" }, "No Stremio app on this PC? Paste the link into Stremio's addon search instead."),
+    h("p", { class: "subtle small center" }, "No Stremio app on this PC? Paste the link into Stremio's addon search instead. Keep it to yourself: it's the key to your debrid account."),
   );
 }
 
